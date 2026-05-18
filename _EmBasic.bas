@@ -26,7 +26,7 @@
 ''''
 ' Standalone dynamic strings must always end with $ in standard mode
 ' (UDT string fields like Boss.Name bypass this suffix requirement
-   because their data type is explicitly locked by the TYPE block definition).
+' because their data type is explicitly locked by the TYPE block definition).
 
 ' When the #CLASSIC compiler directive is active, the compiler abandons the
 ' strict requirement for $, #, and % suffixes and allows a single suffix-less
@@ -3966,7 +3966,7 @@ SUB drawEditorPMI
     actualY = iy + editor.ScrollY
     lineNum = actualY
     numStr$ = LTRIM$(RTRIM$(STR$(lineNum)))
-    numStr$ = "44444"
+    'numStr$ = "44444"
     numPosX = (EDITOR_BOX_X - 4) - (LEN(numStr$) * 8) ' Leaves exactly 4 pixels to of gap between the left white line and the text
 
     IF actualY = editor.CursorY THEN
@@ -21805,7 +21805,13 @@ SUB refineCode
 
   DIM refName$(MAX_SYMBOLS)
   DIM refType(MAX_SYMBOLS) AS LONG
+  DIM refScope(MAX_SYMBOLS) AS LONG
+  DIM activeScope AS LONG
+  DIM scopeCounter AS LONG
+
   refCount = 0
+  activeScope = 0
+  scopeCounter = 0
 
   uiSubCount = 0
 
@@ -21815,6 +21821,12 @@ SUB refineCode
 
     curLine$ = editorText$(iy)
     tempLine$ = LTRIM$(RTRIM$(curLine$))
+
+    uTemp$ = UCASE$(tempLine$)
+    IF LEFT$(uTemp$, 4) = "SUB " OR LEFT$(uTemp$, 9) = "FUNCTION " THEN
+      scopeCounter = scopeCounter + 1
+      activeScope = scopeCounter
+    END IF
 
     IF LEN(tempLine$) > 0 THEN
       newLine$ = ""
@@ -21972,12 +21984,27 @@ SUB refineCode
                 IF suffixVal > 0 THEN origBase$ = LEFT$(ident$, LEN(ident$) - 1)
 
                 vIdx = -1
+                ' Local scope search first
                 FOR ii = 0 TO refCount - 1
                   IF UCASE$(refName$(ii)) = baseName$ AND refType(ii) = suffixVal THEN
-                    vIdx = ii
-                    EXIT FOR
+                    IF refScope(ii) = activeScope THEN
+                      vIdx = ii
+                      EXIT FOR
+                    END IF
                   END IF
                 NEXT
+
+                ' Global scope search if not found locally
+                IF vIdx = -1 AND activeScope > 0 THEN
+                  FOR ii = 0 TO refCount - 1
+                    IF UCASE$(refName$(ii)) = baseName$ AND refType(ii) = suffixVal THEN
+                      IF refScope(ii) = 0 THEN
+                        vIdx = ii
+                        EXIT FOR
+                      END IF
+                    END IF
+                  NEXT
+                END IF
 
                 IF isValidLine = 1 THEN
                   IF vIdx = -1 THEN
@@ -21985,6 +22012,7 @@ SUB refineCode
                       vIdx = refCount
                       refName$(vIdx) = origBase$
                       refType(vIdx) = suffixVal
+                      refScope(vIdx) = activeScope
                       refCount = refCount + 1
                     END IF
                     newLine$ = newLine$ + ident$
@@ -22036,6 +22064,10 @@ SUB refineCode
 
     ELSE
       editorText$(iy) = ""
+    END IF
+
+    IF LEFT$(uTemp$, 8) = "END SUB" OR LEFT$(uTemp$, 12) = "END FUNCTION" THEN
+      activeScope = 0
     END IF
   NEXT
 
