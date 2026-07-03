@@ -1,5 +1,4 @@
 ' CmpBasic.bas - creates a windows 64 executable file byte by byte with simple BASIC ability
-
 ' BASIC commands supported:
 
 ' Suffix-less variables are supported, and implicitly typed dynamic strings are permitted
@@ -200,6 +199,7 @@ CONST MAX_RT_ROUTINES = 128
 CONST MAX_SHUNT = 512
 
 CONST MAX_TIRA_LINES = EDITOR_LINE_MAX * 16
+CONST MAX_CODE_SIZE = 8388608 ' 8MB executable limit
 
 ' Internal compiler commands use !, do not use _
 
@@ -353,6 +353,16 @@ CONST TOK_UBOUND = 644
 CONST TOK_RGB = 645
 CONST TOK_NOREF = 646
 CONST TOK_MEMERROR = 647 ' For testing
+CONST TOK_ABS = 648
+CONST TOK_SGN = 649
+CONST TOK_MEM = 650
+CONST TOK_MEMFILL = 651
+CONST TOK_SNDOPEN = 652 ' Processed as an ignored command
+CONST TOK_SNDPLAY = 653 ' Processed as an ignored command
+CONST TOK_RED32 = 654
+CONST TOK_GREEN32 = 655
+CONST TOK_BLUE32 = 656
+
 
 
 '''' Shunting Yard Operator Constants
@@ -1010,6 +1020,8 @@ TYPE dataTypeShuntingOp
   TargetType AS LONG
   ArgCount AS LONG
   HasField AS LONG
+  FieldSize AS LONG
+  IsDynamic AS LONG
 END TYPE: DIM SHARED shuntOp(MAX_SHUNT) AS dataTypeShuntingOp
 
 TYPE dataTypeShuntingVal
@@ -1192,7 +1204,7 @@ COMMON SHARED lastActionWasTyping AS LONG
 COMMON SHARED declareCount AS LONG
 COMMON SHARED dataItemCount AS LONG
 
-DIM SHARED intermediateCode(1048576) AS _UNSIGNED _BYTE
+DIM SHARED intermediateCode(MAX_CODE_SIZE) AS _UNSIGNED _BYTE
 DIM SHARED symHash(SYMBOL_HASH_MASK) AS LONG
 DIM SHARED dataItemDescIdx(10000) AS LONG
 
@@ -2358,6 +2370,7 @@ SUB compilePass1LexiConsts
             IF cName$ = "" THEN isValidName = 0
             firstChName$ = LEFT$(cName$, 1)
             IF firstChName$ >= "0" AND firstChName$ <= "9" THEN isValidName = 0
+            IF firstChName$ = "_" THEN isValidName = 0
 
             FOR iCheck = 1 TO LEN(cName$)
               chCheckName$ = MID$(cName$, iCheck, 1)
@@ -2395,7 +2408,7 @@ SUB compilePass1LexiConsts
               ELSE
                 isIdentStart = 0
                 uCh$ = UCASE$(ch$)
-                IF (uCh$ >= "A" AND uCh$ <= "Z") OR uCh$ = "_" THEN isIdentStart = 1
+                IF (uCh$ >= "A" AND uCh$ <= "Z") THEN isIdentStart = 1
 
                 IF inQuotes = 0 AND isIdentStart = 1 THEN
                   preventExpansion = 0
@@ -2569,7 +2582,7 @@ SUB compilePass1LexiConsts
             ELSE
               isIdentStart = 0
               uCh$ = UCASE$(ch$)
-              IF (uCh$ >= "A" AND uCh$ <= "Z") OR uCh$ = "_" THEN isIdentStart = 1
+              IF (uCh$ >= "A" AND uCh$ <= "Z") THEN isIdentStart = 1
 
               IF inQuotes = 0 AND isIdentStart = 1 THEN
                 preventExpansion = 0
@@ -2734,6 +2747,9 @@ FUNCTION compilePass2Flatten
 
     curLine$ = compileText$(iy)
     origLineMap = editorLineLinkMap(iy)
+
+    ' Fix: Properly track the original line number so tokenization errors reflect the true location!
+    currentLineNumber = origLineMap
 
     tempLine$ = LTRIM$(RTRIM$(curLine$))
 
@@ -3003,7 +3019,7 @@ SUB compilePass3Scan
 
             SELECT CASE tVal
 
-              CASE TOK_SCREEN, TOK_FONT, TOK_LIMIT, TOK_WIDTH
+              CASE TOK_SCREEN, TOK_FONT, TOK_LIMIT, TOK_WIDTH, TOK_SNDOPEN, TOK_SNDPLAY
                 warnStr$ = retTokenText$(lineTokens$(iTok))
                 IF warnStr$ = "" THEN warnStr$ = "UNKNOWN"
                 addStatusMsg "WARNING line " + retLineNumberStr$ + ": " + warnStr$ + " UNSUPPORTED, LINE IGNORED"
@@ -3214,6 +3230,41 @@ SUB compilePass4Symbols
   udtCount = 0 ' Initialize the global UDT counter
   defaultArrayDynamic = 0
 
+  ' Inject _MEM UDT for native memory manipulation
+  udts(udtCount).RecordName = "_MEM"
+  udtFields(udtCount, 0).FieldName = "OFFSET"
+  udtFields(udtCount, 0).DataType = TYPE_INTEGER64
+  udtFields(udtCount, 0).Offset = 0
+  udtFields(udtCount, 0).Size = 8
+  udtFields(udtCount, 0).UDTIndex = 0
+  udtFields(udtCount, 0).IsDynamicString = 0
+
+  udtFields(udtCount, 1).FieldName = "SIZE"
+  udtFields(udtCount, 1).DataType = TYPE_INTEGER64
+  udtFields(udtCount, 1).Offset = 8
+  udtFields(udtCount, 1).Size = 8
+  udtFields(udtCount, 1).UDTIndex = 0
+  udtFields(udtCount, 1).IsDynamicString = 0
+
+  udtFields(udtCount, 2).FieldName = "ELEMENTSIZE"
+  udtFields(udtCount, 2).DataType = TYPE_INTEGER64
+  udtFields(udtCount, 2).Offset = 16
+  udtFields(udtCount, 2).Size = 8
+  udtFields(udtCount, 2).UDTIndex = 0
+  udtFields(udtCount, 2).IsDynamicString = 0
+
+  udtFields(udtCount, 3).FieldName = "TYPE"
+  udtFields(udtCount, 3).DataType = TYPE_LONG
+  udtFields(udtCount, 3).Offset = 24
+  udtFields(udtCount, 3).Size = 4
+  udtFields(udtCount, 3).UDTIndex = 0
+  udtFields(udtCount, 3).IsDynamicString = 0
+
+  udts(udtCount).FieldCount = 4
+  udts(udtCount).TotalSize = 28
+  currentUdtIdx = 1
+  udtCount = 1
+
   FOR iy = 1 TO compileLastLine
     checkEmergencyClose
     IF compileError = 1 THEN EXIT SUB
@@ -3297,6 +3348,11 @@ SUB compilePass4Symbols
                 dName$ = UCASE$(lineTokens$(2))
                 dRetType = TYPE_UNDEFINED ' Default inert type for SUB
 
+                IF LEFT$(dName$, 1) = "_" THEN
+                  throwCompilerError "IDENTIFIERS CANNOT START WITH _", ASIS, 0
+                  EXIT SUB
+                END IF
+
                 IF tVal2 = TOK_FUNCTION THEN
                   declares(declareCount).IsFunction = 1
 
@@ -3339,6 +3395,11 @@ SUB compilePass4Symbols
 
                         IF aName$ = "" THEN
                           throwCompilerError "EXPECTED ARGUMENT NAME", ASIS, 0
+                          EXIT SUB
+                        END IF
+
+                        IF LEFT$(aName$, 1) = "_" THEN
+                          throwCompilerError "IDENTIFIERS CANNOT START WITH _", ASIS, 0
                           EXIT SUB
                         END IF
 
@@ -3485,6 +3546,11 @@ SUB compilePass4Symbols
             ELSE
               fName$ = UCASE$(firstTok$)
 
+              IF LEFT$(fName$, 1) = "_" THEN
+                throwCompilerError "IDENTIFIERS CANNOT START WITH _", ASIS, 0
+                EXIT SUB
+              END IF
+
               IF lineTokenCount >= 3 THEN
                 IF lineTokenVals(1) = TOK_AS THEN
                   tokIdx = 2
@@ -3553,6 +3619,12 @@ SUB compilePass4Symbols
               END IF
               IF lineTokenCount >= 2 THEN
                 uName$ = UCASE$(lineTokens$(1))
+
+                IF LEFT$(uName$, 1) = "_" THEN
+                  throwCompilerError "IDENTIFIERS CANNOT START WITH _", ASIS, 0
+                  EXIT SUB
+                END IF
+
                 FOR ii = 0 TO udtCount - 1
                   IF RTRIM$(udts(ii).RecordName) = uName$ THEN
                     throwCompilerError "DUPLICATE UDT NAME", ASIS, 0
@@ -4237,6 +4309,13 @@ END SUB ' deleteSelection
 
 ''''''''''''''''''''''''
 SUB emitByteCode (wByte AS _UNSIGNED _BYTE)
+
+  IF compileError = 1 THEN EXIT SUB
+
+  IF stream.emitPos >= MAX_CODE_SIZE THEN
+    throwCompilerError "MACHINE CODE BUFFER OVERFLOW (MAX 8MB)", ASIS, 0
+    EXIT SUB
+  END IF
 
   IF isDummyPass = 1 THEN
     stream.emitPos = stream.emitPos + 1
@@ -6141,7 +6220,7 @@ SUB emitRuntimeInput
     notBsLbl$ = tiraLabelCreateNew$("INP_NOT_BS")
     tiraJmpCond "JNE", charVal$, "8", notBsLbl$ ' Backspace key
 
-    ' --- BACKSPACE LOGIC ---
+    ' Backspace logic
     skipBsLbl$ = tiraLabelCreateNew$("INP_SKIP_BS")
     tiraJmpCond "JLE", bufLen$, "0", skipBsLbl$
     tiraOp TC_SUB, bufLen$, bufLen$, "1"
@@ -6177,7 +6256,7 @@ SUB emitRuntimeInput
     tiraLabel skipBsLbl$
     tiraJmp loopTop$
 
-    ' --- PRINTABLE CHAR LOGIC ---
+    ' Printable char logic
     tiraLabel notBsLbl$
 
     ' Only append if printable ASCII (32 to 126)
@@ -9162,6 +9241,16 @@ SUB hoistIntrinsics
       IF tVal >= 0 AND tVal <= 1024 THEN
         IF isHoistedIntrinsic(tVal) = 1 THEN
           isIntrinsic = 1
+
+          ' Prevent the _MEM type descriptor from being hoisted as a math intrinsic
+          IF iSearch > 0 THEN
+            IF lineTokenVals(iSearch - 1) = TOK_AS THEN isIntrinsic = 0
+          END IF
+
+          ' Prevent statement keywords from being hoisted when they appear at the start of a statement
+          IF iSearch = 0 THEN
+            IF tVal = TOK_PALETTECOLOR THEN isIntrinsic = 0
+          END IF
         END IF
       END IF
 
@@ -9210,6 +9299,11 @@ SUB hoistIntrinsics
         IF tVal >= 0 AND tVal <= 1024 THEN
           IF isHoistedIntrinsic(tVal) = 1 THEN
             isIntrinsic = 1
+
+            ' Prevent the _MEM type descriptor from being hoisted as a math intrinsic
+            IF ii > 0 THEN
+              IF lineTokenVals(ii - 1) = TOK_AS THEN isIntrinsic = 0
+            END IF
           END IF
         END IF
 
@@ -9259,6 +9353,7 @@ SUB initIntrinsics
 
   intrinsicCount = 0
 
+  addIntrinsic "ABS", TYPE_DOUBLE
   addIntrinsic "ASC", TYPE_LONG
   addIntrinsic "ATN", TYPE_SINGLE
   addIntrinsic "CHR$", TYPE_STRING
@@ -9278,6 +9373,7 @@ SUB initIntrinsics
   addIntrinsic "RIGHT$", TYPE_STRING
   addIntrinsic "RND", TYPE_SINGLE
   addIntrinsic "RTRIM$", TYPE_STRING
+  addIntrinsic "SGN", TYPE_LONG
   addIntrinsic "SPACE$", TYPE_STRING
   addIntrinsic "STR$", TYPE_STRING
   addIntrinsic "UCASE$", TYPE_STRING
@@ -9294,6 +9390,11 @@ SUB initIntrinsics
   addIntrinsic "_MOUSEBUTTON", TYPE_LONG
   addIntrinsic "_MOUSEWHEEL", TYPE_LONG
   addIntrinsic "_RGB", TYPE_LONG
+  addIntrinsic "_MEM", TYPE_UDT
+  addIntrinsic "_PALETTECOLOR", TYPE_LONG
+  addIntrinsic "_RED32", TYPE_LONG
+  addIntrinsic "_GREEN32", TYPE_LONG
+  addIntrinsic "_BLUE32", TYPE_LONG
 
 END SUB ' initIntrinsics
 
@@ -9645,8 +9746,17 @@ SUB initKeywords
   addKeyword "_RGB", TOK_RGB, 0
   addKeyword "#NOREF", TOK_NOREF, flagDirective
   addKeyword "MEMERROR", TOK_MEMERROR, 0
+  addKeyword "ABS", TOK_ABS, 0
+  addKeyword "SGN", TOK_SGN, 0
+  addKeyword "_MEM", TOK_MEM, 0
+  addKeyword "_MEMFILL", TOK_MEMFILL, 0
+  addKeyword "_SNDOPEN", TOK_SNDOPEN, 0
+  addKeyword "_SNDPLAY", TOK_SNDPLAY, 0
+  addKeyword "_RED32", TOK_RED32, 0
+  addKeyword "_GREEN32", TOK_GREEN32, 0
+  addKeyword "_BLUE32", TOK_BLUE32, 0
 
-  ' ATTENTION LLM: ALWAYS PUT THESE IN THE ORDER OF TO MATCH TOKEN ORDER. DO NOT REMOVE THIS NOTE
+  ' ATTENTION LLM: ALWAYS ORDER THESE TO MATCH TOKEN ORDER. DO NOT REMOVE THIS NOTE
 
 END SUB ' initKeywords
 
@@ -12890,6 +13000,74 @@ FUNCTION opUnary (passOpCode, passDestType, passDestInfo, passOpSize)
 END FUNCTION ' opUnary
 
 ''''''''''''''''''''''''
+FUNCTION parse_ABS$ (startIdx, endIdx, allowImplicit)
+
+  DIM arg1$
+  DIM scratchName$
+  DIM resVar$
+  DIM skipLbl$
+  DIM argDataType AS LONG
+
+  IF startIdx + 3 > endIdx THEN
+    throwCompilerError "MALFORMED ABS", ASIS, 0
+    parse_ABS$ = ""
+    EXIT FUNCTION
+  END IF
+
+  IF lineTokenVals(startIdx + 1) <> 256 + ASC("(") OR lineTokenVals(endIdx) <> 256 + ASC(")") THEN
+    throwCompilerError "MALFORMED ABS", ASIS, 0
+    parse_ABS$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  arg1$ = tiraParseExpression$(startIdx + 2, endIdx - 1, allowImplicit)
+  IF arg1$ = "" THEN
+    tira_Cancel
+    parse_ABS$ = ""
+    EXIT FUNCTION
+  END IF
+
+  IF exprIs.DataType = TYPE_STRING THEN
+    throwCompilerErrorAndCancelTira "INTRINSIC REQUIRES NUMERIC", ASIS, 0
+    parse_ABS$ = ""
+    EXIT FUNCTION
+  END IF
+
+  argDataType = exprIs.DataType
+
+  scratchName$ = tiraResolveHoistVar$("ABS", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_ABS$ = ""
+    EXIT FUNCTION
+  END IF
+
+  ' Override the default string/single nature dynamically so the temporary variable perfectly matches the supplied argument's byte size and precision
+  ff = resolveSymbol(scratchName$)
+  IF ff = 1 THEN symbols(returnedData2).DataType = argDataType
+
+  resVar$ = tiraDimVar$("T", argDataType)
+  tiraAssign resVar$, arg1$
+
+  skipLbl$ = tiraLabelCreateNew$("SKIP_ABS")
+
+  ' If resVar$ >= 0, skip to the end. Since TC_JMP_COND fully supports floating point checks internally via UCOMI, we can safely run this generically
+  tiraJmpCond "JGE", resVar$, "0", skipLbl$
+  tiraOp TC_NEG, resVar$, resVar$, ""
+  tiraLabel skipLbl$
+
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = argDataType
+  exprIs.IsTemp = 1
+  parse_ABS$ = scratchName$
+
+END FUNCTION ' parse_ABS$
+
+''''''''''''''''''''''''
 FUNCTION parse_ASC$ (startIdx, endIdx, allowImplicit)
 
   DIM arg1$
@@ -13055,6 +13233,56 @@ FUNCTION parse_BEEP (startIdx)
   parse_BEEP = 1
 
 END FUNCTION ' parse_BEEP
+
+''''''''''''''''''''''''
+FUNCTION parse_BLUE32$ (startIdx, endIdx, allowImplicit)
+
+  DIM arg1$
+  DIM scratchName$
+  DIM resVar$
+
+  IF startIdx + 3 > endIdx THEN
+    throwCompilerError "MALFORMED _BLUE32", ASIS, 0
+    parse_BLUE32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  IF lineTokenVals(startIdx + 1) <> 256 + ASC("(") OR lineTokenVals(endIdx) <> 256 + ASC(")") THEN
+    throwCompilerError "MALFORMED _BLUE32", ASIS, 0
+    parse_BLUE32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+
+  arg1$ = tiraParseExpressionInt$(startIdx + 2, endIdx - 1, allowImplicit, "_BLUE32 ARG MUST BE NUMERIC")
+  IF arg1$ = "" THEN
+    tira_Cancel
+    parse_BLUE32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("BLU32", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_BLUE32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+
+  tiraOp TC_AND, resVar$, arg1$, "255"
+
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_BLUE32$ = scratchName$
+
+END FUNCTION ' parse_BLUE32$
 
 ''''''''''''''''''''''''
 FUNCTION parse_CASE (startIdx)
@@ -15684,6 +15912,59 @@ FUNCTION parse_GOTO (startIdx)
 END FUNCTION ' parse_GOTO
 
 ''''''''''''''''''''''''
+FUNCTION parse_GREEN32$ (startIdx, endIdx, allowImplicit)
+
+  DIM arg1$
+  DIM scratchName$
+  DIM resVar$
+  DIM shiftVar$
+
+  IF startIdx + 3 > endIdx THEN
+    throwCompilerError "MALFORMED _GREEN32", ASIS, 0
+    parse_GREEN32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  IF lineTokenVals(startIdx + 1) <> 256 + ASC("(") OR lineTokenVals(endIdx) <> 256 + ASC(")") THEN
+    throwCompilerError "MALFORMED _GREEN32", ASIS, 0
+    parse_GREEN32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+
+  arg1$ = tiraParseExpressionInt$(startIdx + 2, endIdx - 1, allowImplicit, "_GREEN32 ARG MUST BE NUMERIC")
+  IF arg1$ = "" THEN
+    tira_Cancel
+    parse_GREEN32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("GRN32", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_GREEN32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+  shiftVar$ = tiraDimVar$("T", TYPE_LONG)
+
+  tiraOp TC_SHR, shiftVar$, arg1$, "8"
+  tiraOp TC_AND, resVar$, shiftVar$, "255"
+
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_GREEN32$ = scratchName$
+
+END FUNCTION ' parse_GREEN32$
+
+''''''''''''''''''''''''
 FUNCTION parse_HEX$ (startIdx, endIdx, allowImplicit)
 
   DIM arg1$
@@ -17515,6 +17796,114 @@ FUNCTION parse_LTRIM$ (startIdx, endIdx, allowImplicit)
 END FUNCTION ' parse_LTRIM$
 
 ''''''''''''''''''''''''
+FUNCTION parse_MEM$ (startIdx, endIdx, allowImplicit)
+
+  DIM scratchName$
+  DIM vNameTok$
+  DIM vName$
+  DIM vIdx AS LONG
+  DIM memUdtIdx AS LONG
+  DIM baseAddr$
+  DIM destAddr$
+  DIM destSizeAddr$
+  DIM hasIndex AS LONG
+  DIM indicesStr$
+  DIM closeParen AS LONG
+  DIM tokParseIdx AS LONG
+  DIM arrComma AS LONG
+  DIM idxVar$
+
+  IF startIdx + 3 > endIdx THEN
+    throwCompilerError "MALFORMED _MEM", ASIS, 0
+    parse_MEM$ = ""
+    EXIT FUNCTION
+  END IF
+
+  IF lineTokenVals(startIdx + 1) <> 256 + ASC("(") OR lineTokenVals(endIdx) <> 256 + ASC(")") THEN
+    throwCompilerError "MALFORMED _MEM", ASIS, 0
+    parse_MEM$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  vNameTok$ = lineTokens$(startIdx + 2)
+  vName$ = UCASE$(vNameTok$)
+
+  ff = resolveSymbol(vName$)
+  IF ff = 0 THEN
+    tira_Cancel
+    parse_MEM$ = ""
+    EXIT FUNCTION
+  END IF
+  vIdx = returnedData2
+
+  hasIndex = 0
+  indicesStr$ = ""
+  IF startIdx + 3 < endIdx THEN
+    IF lineTokenVals(startIdx + 3) = 256 + ASC("(") THEN
+      hasIndex = 1
+      closeParen = endIdx - 1
+      tokParseIdx = startIdx + 4
+      DO
+        arrComma = findComma(tokParseIdx, closeParen - 1)
+        IF arrComma > 0 THEN
+          idxVar$ = tiraParseExpressionInt$(tokParseIdx, arrComma - 1, 0, "INDEX MUST BE NUMERIC")
+          tokParseIdx = arrComma + 1
+        ELSE
+          IF tokParseIdx <= closeParen - 1 THEN
+            idxVar$ = tiraParseExpressionInt$(tokParseIdx, closeParen - 1, 0, "INDEX MUST BE NUMERIC")
+          ELSE
+            EXIT DO
+          END IF
+        END IF
+        IF idxVar$ = "" THEN EXIT FUNCTION
+        IF indicesStr$ = "" THEN indicesStr$ = idxVar$ ELSE indicesStr$ = indicesStr$ + "," + idxVar$
+        IF arrComma = 0 THEN EXIT DO
+      LOOP
+    END IF
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("MEM", "_UDT")
+  IF scratchName$ = "" THEN
+    parse_MEM$ = ""
+    EXIT FUNCTION
+  END IF
+
+  ff = findUdtIndex("_MEM")
+  memUdtIdx = returnedData2
+
+  ff = resolveSymbol(scratchName$)
+  IF ff = 1 THEN
+    symbols(returnedData2).DataType = TYPE_UDT
+    symbols(returnedData2).UDTIndex = memUdtIdx
+  END IF
+
+  ' Use tiraFrontendCalcAddress$ to seamlessly fetch the direct memory pointer to the structure's data payload
+  baseAddr$ = tiraFrontendCalcAddress$(vName$, indicesStr$, 0)
+  IF baseAddr$ = "" THEN
+    tira_Cancel
+    parse_MEM$ = ""
+    EXIT FUNCTION
+  END IF
+
+  destAddr$ = tiraFrontendCalcAddress$(scratchName$, "", 0)
+  tiraWriteMem destAddr$, baseAddr$, "8"
+
+  ' Ensure SIZE is natively initialized to zero to prevent uninitialized data corruption inside the UDT mapping
+  destSizeAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, destSizeAddr$, destAddr$, "8"
+  tiraWriteMem destSizeAddr$, "0", "8"
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_UDT
+  exprIs.IsTemp = 1
+  parse_MEM$ = scratchName$
+
+END FUNCTION ' parse_MEM$
+
+''''''''''''''''''''''''
 FUNCTION parse_MEMERROR (startIdx)
 
   DIM endIdx AS LONG
@@ -17533,6 +17922,115 @@ FUNCTION parse_MEMERROR (startIdx)
   parse_MEMERROR = 1
 
 END FUNCTION ' parse_MEMERROR
+
+''''''''''''''''''''''''
+FUNCTION parse_MEMFILL (startIdx)
+
+  DIM endIdx AS LONG
+  DIM comma1 AS LONG
+  DIM comma2 AS LONG
+  DIM comma3 AS LONG
+  DIM asIdx AS LONG
+  DIM blockVar$
+  DIM offsetVar$
+  DIM bytesVar$
+  DIM valVar$
+  DIM elemSize AS LONG
+  DIM elemCount$
+  DIM tokIdx AS LONG
+  DIM dtMapped AS LONG
+  DIM valEndIdx AS LONG
+
+  endIdx = lineTokenCount - 1
+
+  comma1 = findComma(startIdx + 1, endIdx)
+  IF comma1 = 0 THEN
+    throwCompilerError "_MEMFILL MISSING ARGUMENTS", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  comma2 = findComma(comma1 + 1, endIdx)
+  IF comma2 = 0 THEN
+    throwCompilerError "_MEMFILL MISSING ARGUMENTS", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  comma3 = findComma(comma2 + 1, endIdx)
+  IF comma3 = 0 THEN
+    throwCompilerError "_MEMFILL MISSING ARGUMENTS", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  asIdx = 0
+  ff = findNextTokenAtDepth0(comma3 + 1, endIdx, TOK_AS)
+  IF ff = 1 THEN
+    asIdx = returnedData2
+  END IF
+
+  valEndIdx = endIdx
+  IF asIdx > 0 THEN valEndIdx = asIdx - 1
+
+  tira_Start
+
+  ' Natively evaluate the memory block argument to trigger index lookups and structural parsing,
+  ' but cleanly discard its result since offsetVar$ inherently provides the definitive absolute address
+  blockVar$ = tiraParseExpression$(startIdx + 1, comma1 - 1, ALIM)
+  IF blockVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  offsetVar$ = tiraParseExpressionInt$(comma1 + 1, comma2 - 1, ALIM, "OFFSET MUST BE NUMERIC")
+  IF offsetVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  bytesVar$ = tiraParseExpressionInt$(comma2 + 1, comma3 - 1, ALIM, "BYTES MUST BE NUMERIC")
+  IF bytesVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  valVar$ = tiraParseExpressionInt$(comma3 + 1, valEndIdx, ALIM, "VALUE MUST BE NUMERIC")
+  IF valVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  elemSize = 1
+  IF asIdx > 0 THEN
+    tokIdx = asIdx + 1
+    tokIdx = parseTypeClause(tokIdx, endIdx)
+    dtMapped = returnedData2
+
+    SELECT CASE dtMapped
+
+      CASE TYPE_BYTE, TYPE_UBYTE: elemSize = 1
+      CASE TYPE_INTEGER, TYPE_UINTEGER: elemSize = 2
+      CASE TYPE_LONG, TYPE_ULONG, TYPE_SINGLE: elemSize = 4
+      CASE TYPE_INTEGER64, TYPE_UINT64, TYPE_DOUBLE: elemSize = 8
+
+    END SELECT ' dtMapped
+
+  END IF
+
+  elemCount$ = tiraDimVar$("T", TYPE_LONG)
+  IF elemSize > 1 THEN
+    tiraOp TC_IDIV, elemCount$, bytesVar$, LTRIM$(STR$(elemSize))
+  ELSE
+    tiraAssign elemCount$, bytesVar$
+  END IF
+
+  ' Map strictly directly into the hardware-accelerated REP STOS engine via tiraMemSetEx
+  tiraMemSetEx offsetVar$, valVar$, elemCount$, LTRIM$(STR$(elemSize))
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_MEMFILL = 1
+
+END FUNCTION ' parse_MEMFILL
 
 ''''''''''''''''''''''''
 FUNCTION parse_MID$ (startIdx, endIdx, allowImplicit)
@@ -18399,6 +18897,11 @@ FUNCTION parse_PALETTECOLOR (startIdx)
 
   endIdx = lineTokenCount - 1
 
+  IF compileHasGraphics = 0 THEN
+    throwCompilerError "_PALETTECOLOR REQUIRES #GRAPHICS", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
   comma1 = findComma(startIdx + 1, endIdx)
 
   IF comma1 = 0 THEN
@@ -18454,6 +18957,87 @@ FUNCTION parse_PALETTECOLOR (startIdx)
   parse_PALETTECOLOR = 1
 
 END FUNCTION ' parse_PALETTECOLOR
+
+''''''''''''''''''''''''
+FUNCTION parse_PALETTECOLOR_FUNC$ (startIdx, endIdx, allowImplicit)
+
+  DIM arg1$
+  DIM scratchName$
+  DIM resVar$
+  DIM palDescPtr$
+  DIM palDataAddr$
+  DIM offsetVar$
+  DIM targetAddr$
+  DIM skipLbl$
+
+  IF startIdx + 3 > endIdx THEN
+    throwCompilerError "MALFORMED _PALETTECOLOR", ASIS, 0
+    parse_PALETTECOLOR_FUNC$ = ""
+    EXIT FUNCTION
+  END IF
+
+  IF lineTokenVals(startIdx + 1) <> 256 + ASC("(") OR lineTokenVals(endIdx) <> 256 + ASC(")") THEN
+    throwCompilerError "MALFORMED _PALETTECOLOR", ASIS, 0
+    parse_PALETTECOLOR_FUNC$ = ""
+    EXIT FUNCTION
+  END IF
+
+  IF compileHasGraphics = 0 THEN
+    throwCompilerError "_PALETTECOLOR REQUIRES #GRAPHICS", ASIS, 0
+    parse_PALETTECOLOR_FUNC$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+
+  arg1$ = tiraParseExpressionInt$(startIdx + 2, endIdx - 1, allowImplicit, "INDEX MUST BE NUMERIC")
+  IF arg1$ = "" THEN
+    tira_Cancel
+    parse_PALETTECOLOR_FUNC$ = ""
+    EXIT FUNCTION
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("PALCOL", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_PALETTECOLOR_FUNC$ = ""
+    EXIT FUNCTION
+  END IF
+
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign resVar$, "0"
+
+  skipLbl$ = tiraLabelCreateNew$("SKIP_PALCOL")
+
+  tiraJmpCond "JL", arg1$, "0", skipLbl$
+  tiraJmpCond "JG", arg1$, "255", skipLbl$
+
+  palDescPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign palDescPtr$, "!G_GFX_PALETTE_DESC$"
+
+  palDataAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_READ_MEM, palDataAddr$ + ", " + palDescPtr$
+
+  offsetVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_MUL, offsetVar$, arg1$, "4"
+
+  targetAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, targetAddr$, palDataAddr$, offsetVar$
+
+  tiraNew TC_READ_MEM, resVar$ + ", " + targetAddr$
+
+  tiraLabel skipLbl$
+
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_PALETTECOLOR_FUNC$ = scratchName$
+
+END FUNCTION ' parse_PALETTECOLOR_FUNC$
 
 ''''''''''''''''''''''''
 FUNCTION parse_PEEK$ (startIdx, endIdx, allowImplicit)
@@ -19398,6 +19982,11 @@ FUNCTION parse_READ (startIdx)
   DIM indicesStr$
   DIM numParsedIndices AS LONG
   DIM tokParseIdx AS LONG
+  DIM currUdtIndex AS LONG
+  DIM tempFieldSize AS LONG
+  DIM tempIsDynamicString AS LONG
+  DIM isFixedStr AS LONG
+  DIM fixedLen AS LONG
 
   endIdx = lineTokenCount - 1
 
@@ -19476,25 +20065,31 @@ FUNCTION parse_READ (startIdx)
 
     hasField = 0
     udtOffset = 0
-    IF tokIdx <= itemEnd THEN
+    currUdtIndex = symbols(vIdx).UDTIndex
+    tempFieldSize = 0
+    tempIsDynamicString = 0
+
+    DO WHILE tokIdx <= itemEnd
       IF lineTokenVals(tokIdx) = 256 + ASC(".") THEN
         hasField = 1
         tokIdx = tokIdx + 1
         fieldName$ = UCASE$(lineTokens$(tokIdx))
         tokIdx = tokIdx + 1
 
-        IF symbols(vIdx).DataType <> TYPE_UDT THEN
+        IF targetType <> TYPE_UDT THEN
           throwCompilerError "VARIABLE IS NOT A UDT", ASIS, 0
           tira_Cancel
           EXIT FUNCTION
         END IF
 
-        uIdx = symbols(vIdx).UDTIndex
         fieldFound = 0
-        FOR iField = 0 TO udts(uIdx).FieldCount - 1
-          IF RTRIM$(udtFields(uIdx, iField).FieldName) = fieldName$ THEN
-            udtOffset = udtFields(uIdx, iField).Offset
-            targetType = udtFields(uIdx, iField).DataType
+        FOR iField = 0 TO udts(currUdtIndex).FieldCount - 1
+          IF RTRIM$(udtFields(currUdtIndex, iField).FieldName) = fieldName$ THEN
+            udtOffset = udtOffset + udtFields(currUdtIndex, iField).Offset
+            targetType = udtFields(currUdtIndex, iField).DataType
+            tempFieldSize = udtFields(currUdtIndex, iField).Size
+            tempIsDynamicString = udtFields(currUdtIndex, iField).IsDynamicString
+            currUdtIndex = udtFields(currUdtIndex, iField).UDTIndex
             fieldFound = 1
             EXIT FOR
           END IF
@@ -19505,8 +20100,10 @@ FUNCTION parse_READ (startIdx)
           tira_Cancel
           EXIT FUNCTION
         END IF
+      ELSE
+        EXIT DO
       END IF
-    END IF
+    LOOP
 
     ptr$ = tiraFrontendCalcAddress$(vName$, indicesStr$, udtOffset)
     IF ptr$ = "" THEN
@@ -19517,19 +20114,58 @@ FUNCTION parse_READ (startIdx)
     isStrVar = 0
     IF targetType = TYPE_STRING THEN isStrVar = 1
 
-    tiraCall "RT_READ", 3, ptr$ + ", " + cTrNum$(isStrVar) + ", " + cTrNum$(targetType)
+    isFixedStr = 0
+    fixedLen = 0
+
+    IF isStrVar = 1 THEN
+      IF hasField = 1 THEN
+        IF tempIsDynamicString = 0 THEN
+          isFixedStr = 1
+          fixedLen = tempFieldSize
+        END IF
+      ELSE
+        fixedLen = retFixedStringLength(vIdx)
+        IF fixedLen > 0 THEN
+          isFixedStr = 1
+        END IF
+      END IF
+    END IF
+
+    IF isFixedStr = 1 THEN
+      ' Read safely into a temporary dynamic string to respect raw character constraints
+      tempDesc$ = tiraResolveHoistVar$("RDTMP", "_DESC$")
+      tiraAssign tempDesc$, "!G_SYS_EMPTY_DESC$"
+
+      tiraCall "RT_READ", 3, tempDesc$ + ", 1, " + cTrNum$(TYPE_STRING)
+
+      ' Copy raw characters seamlessly into the fixed data buffer without memory corruption
+      rhsDataPtr$ = tiraGetStringData$(tempDesc$)
+      rhsLen$ = tiraGetStringLen$(tempDesc$)
+
+      minLen$ = tiraDimVar$("T", TYPE_LONG)
+      tiraAssign minLen$, rhsLen$
+      tiraClamp minLen$, "", LTRIM$(STR$(fixedLen))
+
+      tiraMemcpy ptr$, rhsDataPtr$, minLen$
+
+      padLen$ = tiraDimVar$("T", TYPE_LONG)
+      tiraOp TC_SUB, padLen$, LTRIM$(STR$(fixedLen)), minLen$
+      skipPadLbl$ = tiraLabelCreateNew$("SKIP_PAD")
+      tiraJmpCond "JLE", padLen$, "0", skipPadLbl$
+
+      padAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+      tiraOp TC_ADD, padAddr$, ptr$, minLen$
+      tiraMemSet padAddr$, "32", padLen$
+      tiraLabel skipPadLbl$
+
+      ' Garbage collect the temporary dynamic string
+      tiraCall "RT_STR_ASSIGN", 2, tempDesc$ + ", !G_SYS_EMPTY_DESC$"
+    ELSE
+      tiraCall "RT_READ", 3, ptr$ + ", " + cTrNum$(isStrVar) + ", " + cTrNum$(targetType)
+    END IF
 
     itemStart = itemEnd + 2
   LOOP
-
-  skipErrLbl$ = tiraLabelCreateNew$("READ_SKIP_ERR")
-  tiraJmpCond "JL", "!G_SYS_DATA_PTR_VAL", "!G_SYS_DATA_COUNT_VAL", skipErrLbl$
-
-  tiraFatalError "OUT OF DATA ERROR ON READ"
-
-  tiraLabel skipErrLbl$
-
-  tiraOp TC_ADD, "!G_SYS_DATA_PTR_VAL", "!G_SYS_DATA_PTR_VAL", "1"
 
   tiraScheduleHeapReset
   tira_EndAndProcess
@@ -19815,6 +20451,59 @@ FUNCTION parse_REDIM (startIdx)
   parse_REDIM = 1
 
 END FUNCTION ' parse_REDIM
+
+''''''''''''''''''''''''
+FUNCTION parse_RED32$ (startIdx, endIdx, allowImplicit)
+
+  DIM arg1$
+  DIM scratchName$
+  DIM resVar$
+  DIM shiftVar$
+
+  IF startIdx + 3 > endIdx THEN
+    throwCompilerError "MALFORMED _RED32", ASIS, 0
+    parse_RED32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  IF lineTokenVals(startIdx + 1) <> 256 + ASC("(") OR lineTokenVals(endIdx) <> 256 + ASC(")") THEN
+    throwCompilerError "MALFORMED _RED32", ASIS, 0
+    parse_RED32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+
+  arg1$ = tiraParseExpressionInt$(startIdx + 2, endIdx - 1, allowImplicit, "_RED32 ARG MUST BE NUMERIC")
+  IF arg1$ = "" THEN
+    tira_Cancel
+    parse_RED32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("RED32", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_RED32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+  shiftVar$ = tiraDimVar$("T", TYPE_LONG)
+
+  tiraOp TC_SHR, shiftVar$, arg1$, "16"
+  tiraOp TC_AND, resVar$, shiftVar$, "255"
+
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_RED32$ = scratchName$
+
+END FUNCTION ' parse_RED32$
 
 ''''''''''''''''''''''''
 FUNCTION parse_RESTORE (startIdx)
@@ -20139,6 +20828,7 @@ FUNCTION parse_RGB32$ (startIdx, endIdx, allowImplicit)
   DIM maskB$
   DIM shiftG$
   DIM shiftR$
+  DIM alphaVal$
   DIM resVar$
 
   IF startIdx + 7 > endIdx THEN
@@ -20213,9 +20903,14 @@ FUNCTION parse_RGB32$ (startIdx, endIdx, allowImplicit)
   shiftR$ = tiraDimVar$("T", TYPE_LONG)
   tiraOp TC_SHL, shiftR$, maskR$, "16"
 
+  ' Default the missing alpha value safely to &HFF000000 (-16777216)
+  alphaVal$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign alphaVal$, "-16777216"
+
   resVar$ = tiraDimVar$("T", TYPE_LONG)
   tiraOp TC_ADD, resVar$, maskB$, shiftG$
   tiraOp TC_ADD, resVar$, resVar$, shiftR$
+  tiraOp TC_ADD, resVar$, resVar$, alphaVal$
 
   tiraAssign scratchName$, resVar$
 
@@ -20550,6 +21245,77 @@ FUNCTION parse_SELECT (startIdx)
   parse_SELECT = 1
 
 END FUNCTION ' parse_SELECT
+
+''''''''''''''''''''''''
+FUNCTION parse_SGN$ (startIdx, endIdx, allowImplicit)
+
+  DIM arg1$
+  DIM scratchName$
+  DIM resVar$
+  DIM lblPos$
+  DIM lblEnd$
+
+  IF startIdx + 3 > endIdx THEN
+    throwCompilerError "MALFORMED SGN", ASIS, 0
+    parse_SGN$ = ""
+    EXIT FUNCTION
+  END IF
+
+  IF lineTokenVals(startIdx + 1) <> 256 + ASC("(") OR lineTokenVals(endIdx) <> 256 + ASC(")") THEN
+    throwCompilerError "MALFORMED SGN", ASIS, 0
+    parse_SGN$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+
+  arg1$ = tiraParseExpression$(startIdx + 2, endIdx - 1, allowImplicit)
+  IF arg1$ = "" THEN
+    tira_Cancel
+    parse_SGN$ = ""
+    EXIT FUNCTION
+  END IF
+
+  IF exprIs.DataType = TYPE_STRING THEN
+    throwCompilerErrorAndCancelTira "INTRINSIC REQUIRES NUMERIC", ASIS, 0
+    parse_SGN$ = ""
+    EXIT FUNCTION
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("SGN", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_SGN$ = ""
+    EXIT FUNCTION
+  END IF
+
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign resVar$, "0"
+
+  lblPos$ = tiraLabelCreateNew$("SGN_POS")
+  lblEnd$ = tiraLabelCreateNew$("SGN_END")
+
+  ' TC_JMP_COND seamlessly handles float/integer mixed conditions safely using UCOMI
+  tiraJmpCond "JE", arg1$, "0", lblEnd$
+  tiraJmpCond "JG", arg1$, "0", lblPos$
+
+  tiraAssign resVar$, "-1"
+  tiraJmp lblEnd$
+
+  tiraLabel lblPos$
+  tiraAssign resVar$, "1"
+
+  tiraLabel lblEnd$
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_SGN$ = scratchName$
+
+END FUNCTION ' parse_SGN$
 
 ''''''''''''''''''''''''
 FUNCTION parse_SIN$ (startIdx, endIdx, allowImplicit)
@@ -21593,6 +22359,10 @@ FUNCTION parseAssign (startIdx)
   DIM idxVar$
   DIM numParsedIndices AS LONG
 
+  DIM udtFieldNames$(16)
+  DIM udtFieldCount AS LONG
+  DIM iDot AS LONG
+
   vTok$ = lineTokens$(startIdx)
   vTokVal = lineTokenVals(startIdx)
 
@@ -21639,14 +22409,19 @@ FUNCTION parseAssign (startIdx)
       END IF
     END IF
 
-    ' 3. Detect and process UDT field separator (Now immune to legacy dot variables)
-    IF tokIdx <= endIdx THEN
+    ' 3. Detect and process UDT field separators iteratively (Now immune to legacy dot variables)
+    udtFieldCount = 0
+    hasField = 0
+    DO WHILE tokIdx <= endIdx
       IF lineTokenVals(tokIdx) = 256 + ASC(".") THEN
         hasField = 1
-        fNameTok$ = UCASE$(lineTokens$(tokIdx + 1))
+        udtFieldNames$(udtFieldCount) = UCASE$(lineTokens$(tokIdx + 1))
+        udtFieldCount = udtFieldCount + 1
         tokIdx = tokIdx + 2 ' Skip the dot and the field name
+      ELSE
+        EXIT DO
       END IF
-    END IF
+    LOOP
 
     ' Verify the presence of assignment operator
     IF tokIdx > endIdx OR lineTokenVals(tokIdx) <> 256 + ASC("=") THEN EXIT FUNCTION
@@ -21673,33 +22448,42 @@ FUNCTION parseAssign (startIdx)
       symbols(vIdx).IsExplicit = DECL_QUIET
     END IF
 
-    ' Extract and process UDT field metadata
+    ' Extract and process UDT field metadata through nested command stack
     IF hasField = 1 THEN
       IF targetType <> TYPE_UDT THEN
         throwCompilerError "VARIABLE IS NOT A UDT", ASIS, 0
         EXIT FUNCTION
       END IF
 
-      uIdx = symbols(vIdx).UDTIndex
-      fieldFound = 0
-      tempUdtIndex = 0
+      tempUdtIndex = symbols(vIdx).UDTIndex
+      udtOffset = 0
       tempIsDynamicString = 0
-      FOR iField = 0 TO udts(uIdx).FieldCount - 1
-        IF RTRIM$(udtFields(uIdx, iField).FieldName) = fNameTok$ THEN
-          udtOffset = udtFields(uIdx, iField).Offset
-          targetType = udtFields(uIdx, iField).DataType
-          tempUdtIndex = udtFields(uIdx, iField).UDTIndex
-          tempFieldSize = udtFields(uIdx, iField).Size
-          tempIsDynamicString = udtFields(uIdx, iField).IsDynamicString
-          fieldFound = 1
-          EXIT FOR
-        END IF
-      NEXT
 
-      IF fieldFound = 0 THEN
-        throwCompilerError "UDT FIELD NOT FOUND", ASIS, 0
-        EXIT FUNCTION
-      END IF
+      FOR iDot = 0 TO udtFieldCount - 1
+        uIdx = tempUdtIndex
+        fieldFound = 0
+        FOR iField = 0 TO udts(uIdx).FieldCount - 1
+          IF RTRIM$(udtFields(uIdx, iField).FieldName) = udtFieldNames$(iDot) THEN
+            udtOffset = udtOffset + udtFields(uIdx, iField).Offset
+            targetType = udtFields(uIdx, iField).DataType
+            tempUdtIndex = udtFields(uIdx, iField).UDTIndex
+            tempFieldSize = udtFields(uIdx, iField).Size
+            tempIsDynamicString = udtFields(uIdx, iField).IsDynamicString
+            fieldFound = 1
+            EXIT FOR
+          END IF
+        NEXT
+
+        IF fieldFound = 0 THEN
+          throwCompilerError "UDT FIELD NOT FOUND", ASIS, 0
+          EXIT FUNCTION
+        END IF
+
+        IF iDot < udtFieldCount - 1 AND targetType <> TYPE_UDT THEN
+          throwCompilerError "VARIABLE IS NOT A UDT", ASIS, 0
+          EXIT FUNCTION
+        END IF
+      NEXT iDot
     END IF
 
     expectedSymType = targetType
@@ -21950,12 +22734,14 @@ FUNCTION parseAssignRouter (startIdx)
     END IF
   END IF
 
-  ' Fast-fail lookahead: Skip over any UDT fields
-  IF checkIdx < lineTokenCount THEN
+  ' Fast-fail lookahead: Skip over any number of UDT fields
+  DO WHILE checkIdx < lineTokenCount
     IF lineTokenVals(checkIdx) = 256 + ASC(".") THEN
       checkIdx = checkIdx + 2 ' Skip the dot and the field name
+    ELSE
+      EXIT DO
     END IF
-  END IF
+  LOOP
 
   ' Check if the resulting token is an equals sign
   IF checkIdx < lineTokenCount THEN
@@ -21986,6 +22772,12 @@ FUNCTION parseIntrinsic$ (startIdx, endIdx, allowImplicit)
   tVal = lineTokenVals(startIdx)
 
   SELECT CASE tVal
+
+    CASE TOK_ABS
+      parseIntrinsic$ = parse_ABS$(startIdx, endIdx, allowImplicit)
+
+    CASE TOK_SGN
+      parseIntrinsic$ = parse_SGN$(startIdx, endIdx, allowImplicit)
 
     CASE TOK_HEX
       parseIntrinsic$ = parse_HEX$(startIdx, endIdx, allowImplicit)
@@ -22091,6 +22883,21 @@ FUNCTION parseIntrinsic$ (startIdx, endIdx, allowImplicit)
 
     CASE TOK_RGB
       parseIntrinsic$ = parse_RGB$(startIdx, endIdx, allowImplicit)
+
+    CASE TOK_MEM
+      parseIntrinsic$ = parse_MEM$(startIdx, endIdx, allowImplicit)
+
+    CASE TOK_PALETTECOLOR
+      parseIntrinsic$ = parse_PALETTECOLOR_FUNC$(startIdx, endIdx, allowImplicit)
+
+    CASE TOK_RED32
+      parseIntrinsic$ = parse_RED32$(startIdx, endIdx, allowImplicit)
+
+    CASE TOK_GREEN32
+      parseIntrinsic$ = parse_GREEN32$(startIdx, endIdx, allowImplicit)
+
+    CASE TOK_BLUE32
+      parseIntrinsic$ = parse_BLUE32$(startIdx, endIdx, allowImplicit)
 
     CASE ELSE
       throwCompilerError "UNIMPLEMENTED HOISTED INTRINSIC", ASIS, 0
@@ -22589,6 +23396,12 @@ FUNCTION parseStatement (startIdx)
         IF compileStatusMsg$ = "" THEN throwCompilerError "MEMERROR", WITHFAILED, 0
       END IF
 
+    CASE TOK_MEMFILL
+      IF parse_MEMFILL(startIdx) = 0 OR compileError = 1 THEN
+        tempSuccess = 0
+        IF compileStatusMsg$ = "" THEN throwCompilerError "_MEMFILL", WITHFAILED, 0
+      END IF
+
     CASE TOK_LOOP
       IF parse_LOOP(startIdx) = 0 OR compileError = 1 THEN
         tempSuccess = 0
@@ -22699,7 +23512,7 @@ FUNCTION parseStatement (startIdx)
         IF compileStatusMsg$ = "" THEN throwCompilerError "RETURN", WITHFAILED, 0
       END IF
 
-    CASE TOK_SCREEN, TOK_FONT, TOK_LIMIT, TOK_WIDTH
+    CASE TOK_SCREEN, TOK_FONT, TOK_LIMIT, TOK_WIDTH, TOK_SNDOPEN, TOK_SNDPLAY
 
     CASE TOK_SELECT
       IF parse_SELECT(startIdx) = 0 OR compileError = 1 THEN
@@ -23216,15 +24029,23 @@ FUNCTION parseTypeClause (startTokIdx, endIdx)
         END SELECT ' tType
 
       ELSE
-        IF tType = 0 THEN ' UDT Identifier Match
-          uTok$ = UCASE$(lineTokens$(tempTokIdx))
+        IF tType = 0 OR tType = TOK_MEM THEN ' UDT Identifier Match
+          IF tType = TOK_MEM THEN
+            uTok$ = "_MEM"
+          ELSE
+            uTok$ = UCASE$(lineTokens$(tempTokIdx))
+          END IF
           ff = findUdtIndex(uTok$)
           IF ff = 1 THEN
             typeData = returnedData2
             tempTokIdx = tempTokIdx + 1
             tempType = TYPE_UDT
           ELSE
-            throwCompilerError "UNSUPPORTED TYPE OR UNKNOWN UDT " + CHR$(34) + lineTokens$(tempTokIdx) + CHR$(34), ASIS, 0
+            IF tType = TOK_MEM THEN
+              throwCompilerError "UNSUPPORTED TYPE OR UNKNOWN UDT _MEM", ASIS, 0
+            ELSE
+              throwCompilerError "UNSUPPORTED TYPE OR UNKNOWN UDT " + CHR$(34) + lineTokens$(tempTokIdx) + CHR$(34), ASIS, 0
+            END IF
           END IF
         ELSE
           throwCompilerError "UNSUPPORTED TYPE " + CHR$(34) + retTokenText$(lineTokens$(tempTokIdx)) + CHR$(34), ASIS, 0
@@ -24031,327 +24852,9 @@ FUNCTION processDropdownMenu (wPosX, wPosY, wItemCount, passItems$())
 END FUNCTION ' processDropdownMenu
 
 ''''''''''''''''''''''''
-SUB processInput
-
-  IF keyCheck("ESC") THEN
-    IF editor.MenuMode = 1 THEN
-      editor.MenuMode = 0
-      waitKeyRelease "ESC"
-    ELSE
-      IF _KEYDOWN(100303) OR _KEYDOWN(100304) THEN
-        waitKeyRelease "ESC"
-        confirmExit
-      END IF
-    END IF
-  END IF
-
-  IF keyCheck("F5") THEN
-    waitKeyRelease "F5"
-    IF compileState = COMP_IDLE THEN
-      statusMsgCount = 1
-      editor.StatusScrollY = 1
-      editor.StatusSelectedIndex = 0
-      FOR ii = 1 TO 999
-        statusMsg$(ii) = ""
-      NEXT
-      compileState = COMP_REFINE
-      addStatusMsg "REFINING..."
-    END IF
-  END IF
-
-  IF (_KEYDOWN(100306) OR _KEYDOWN(100305)) AND keyCheck("F") THEN
-    waitKeyRelease "F"
-    searchModal
-  END IF
-
-  IF keyCheck("F3") THEN
-    waitKeyRelease "F3"
-    IF editorSearchQuery$ <> "" THEN
-      findEditorNext
-    ELSE
-      searchModal
-    END IF
-  END IF
-
-  kVal = _KEYHIT
-  IF kVal = 0 THEN EXIT SUB
-
-  IF editor.Focus = 2 THEN
-    ' Ctrl+C (Copy)
-    IF kVal = 3 OR ((kVal = 99 OR kVal = 67) AND (_KEYDOWN(100306) OR _KEYDOWN(100305))) THEN
-      IF editor.StatusSelectedIndex <> 0 THEN
-        _CLIPBOARD$ = statusMsg$(editor.StatusSelectedIndex)
-      END IF
-      kVal = 0
-    END IF
-
-    ' Ctrl+X (Cut) - Treat as copy for status bar
-    IF kVal = 24 OR ((kVal = 120 OR kVal = 88) AND (_KEYDOWN(100306) OR _KEYDOWN(100305))) THEN
-      IF editor.StatusSelectedIndex <> 0 THEN
-        _CLIPBOARD$ = statusMsg$(editor.StatusSelectedIndex)
-      END IF
-      kVal = 0
-    END IF
-  END IF
-
-  IF editor.Focus = 1 THEN
-
-    lastLine = editor.LastLine
-    IF editor.CursorY > lastLine THEN lastLine = editor.CursorY
-
-    oldCursorY = editor.CursorY
-
-    ' Ctrl+Z (Undo)
-    IF kVal = 26 OR ((kVal = 122 OR kVal = 90) AND (_KEYDOWN(100306) OR _KEYDOWN(100305))) THEN
-      undo_StateRestore
-      kVal = 0
-      lastActionWasTyping = 0
-    END IF
-
-    ' Ctrl+C (Copy)
-    IF kVal = 3 OR ((kVal = 99 OR kVal = 67) AND (_KEYDOWN(100306) OR _KEYDOWN(100305))) THEN
-      IF editor.IsSelecting = 1 THEN
-        copyText$ = retEditorSelection$
-        IF copyText$ <> "" THEN _CLIPBOARD$ = copyText$
-      END IF
-      kVal = 0
-    END IF
-
-    ' Ctrl+X (Cut)
-    IF kVal = 24 OR ((kVal = 120 OR kVal = 88) AND (_KEYDOWN(100306) OR _KEYDOWN(100305))) THEN
-      IF editor.IsSelecting = 1 THEN
-        undo_StateSave
-        lastActionWasTyping = 0
-        copyText$ = retEditorSelection$
-        IF copyText$ <> "" THEN _CLIPBOARD$ = copyText$
-        deleteSelection
-        editor.IsSelecting = 0
-      END IF
-      kVal = 0
-    END IF
-
-    ' Ctrl+A (Select All)
-    IF kVal = 1 OR ((kVal = 97 OR kVal = 65) AND (_KEYDOWN(100306) OR _KEYDOWN(100305))) THEN
-      editor.SelectStartX = 0
-      editor.SelectStartY = 1
-      editor.CursorY = editor.LastLine
-      editor.CursorX = LEN(editorText$(editor.LastLine))
-      editor.IsSelecting = 1
-      kVal = 0
-    END IF
-
-    isMoveKey = 0
-    IF kVal = 19200 OR kVal = 19712 OR kVal = 18432 OR kVal = 20480 OR kVal = 18176 OR kVal = 20224 OR kVal = 18688 OR kVal = 20736 THEN isMoveKey = 1
-
-    IF isMoveKey = 1 THEN
-      lastActionWasTyping = 0
-      IF _KEYDOWN(100303) OR _KEYDOWN(100304) THEN
-        IF editor.IsSelecting = 0 THEN
-          editor.SelectStartX = editor.CursorX
-          editor.SelectStartY = editor.CursorY
-          editor.IsSelecting = 1
-        END IF
-      ELSE
-        editor.IsSelecting = 0
-      END IF
-    END IF
-
-    IF (kVal >= 32 AND kVal <= 126) OR kVal = 8 OR kVal = 212231 OR kVal = 21248 OR kVal = 13 OR kVal = 118 THEN
-      IF isMoveKey = 0 AND kVal <> 0 THEN
-        IF editor.IsSelecting = 1 THEN
-          undo_StateSave
-          IF (kVal >= 32 AND kVal <= 126) THEN
-            lastActionWasTyping = 1
-          ELSE
-            lastActionWasTyping = 0
-          END IF
-
-          IF kVal = 8 OR kVal = 212231 OR kVal = 21248 THEN
-            deleteSelection
-            editor.IsSelecting = 0
-            kVal = 0 ' Consume key to prevent normal backspace/delete
-          ELSE
-            IF (kVal >= 32 AND kVal <= 126) OR kVal = 13 THEN
-              deleteSelection
-              editor.IsSelecting = 0
-            ELSE
-              editor.IsSelecting = 0
-            END IF
-          END IF
-        END IF
-      END IF
-    END IF
-
-    IF kVal = 118 AND (_KEYDOWN(100306) OR _KEYDOWN(100305)) THEN ' Ctrl+V (Paste)
-      IF editor.IsSelecting = 0 THEN undo_StateSave
-      lastActionWasTyping = 0
-      pasteClipboardText
-      kVal = 0
-    END IF
-
-    IF kVal >= 32 AND kVal <= 126 THEN ' Printable character
-      IF lastActionWasTyping = 0 THEN undo_StateSave
-      lastActionWasTyping = 1
-      currentLine$ = editorText$(editor.CursorY)
-      leftPart$ = LEFT$(currentLine$, editor.CursorX)
-      rightPart$ = MID$(currentLine$, editor.CursorX + 1)
-      editorText$(editor.CursorY) = leftPart$ + CHR$(kVal) + rightPart$
-      editor.CursorX = editor.CursorX + 1
-    END IF
-
-    IF kVal = 8 THEN ' Backspace
-      undo_StateSave
-      lastActionWasTyping = 0
-      IF editor.CursorX > 0 THEN ' Delete character to the left
-        currentLine$ = editorText$(editor.CursorY)
-        leftPart$ = LEFT$(currentLine$, editor.CursorX - 1)
-        rightPart$ = MID$(currentLine$, editor.CursorX + 1)
-        editorText$(editor.CursorY) = leftPart$ + rightPart$
-        editor.CursorX = editor.CursorX - 1
-      ELSE
-        IF editor.CursorY > 1 THEN ' Merge with previous line
-          prevLineLen = LEN(editorText$(editor.CursorY - 1))
-          editor.CursorX = prevLineLen
-          editorText$(editor.CursorY - 1) = editorText$(editor.CursorY - 1) + editorText$(editor.CursorY)
-          FOR ii = editor.CursorY TO editor.LastLine - 1
-            editorText$(ii) = editorText$(ii + 1)
-          NEXT
-          editorText$(editor.LastLine) = ""
-          editor.CursorY = editor.CursorY - 1
-          editor.LastLine = editor.LastLine - 1
-          IF editor.LastLine < 1 THEN editor.LastLine = 1
-        END IF
-      END IF
-    END IF
-
-    IF kVal = 212231 OR kVal = 21248 THEN ' Delete key
-      undo_StateSave
-      lastActionWasTyping = 0
-      currentLine$ = editorText$(editor.CursorY)
-      IF editor.CursorX < LEN(currentLine$) THEN ' Delete character to the right
-        leftPart$ = LEFT$(currentLine$, editor.CursorX)
-        rightPart$ = MID$(currentLine$, editor.CursorX + 2)
-        editorText$(editor.CursorY) = leftPart$ + rightPart$
-      ELSE
-        IF editor.CursorY < lastLine THEN ' Merge next line into current
-          editorText$(editor.CursorY) = currentLine$ + editorText$(editor.CursorY + 1)
-          FOR ii = editor.CursorY + 1 TO editor.LastLine - 1
-            editorText$(ii) = editorText$(ii + 1)
-          NEXT
-          editorText$(editor.LastLine) = ""
-          editor.LastLine = editor.LastLine - 1
-          IF editor.LastLine < 1 THEN editor.LastLine = 1
-        END IF
-      END IF
-    END IF
-
-    IF kVal = 13 THEN ' Enter key, split line at cursor
-      undo_StateSave
-      lastActionWasTyping = 0
-      IF editor.CursorY < EDITOR_LINE_MAX THEN
-        currentLine$ = editorText$(editor.CursorY)
-        leftPart$ = LEFT$(currentLine$, editor.CursorX)
-        rightPart$ = MID$(currentLine$, editor.CursorX + 1)
-        editorText$(editor.CursorY) = leftPart$
-        FOR ii = editor.LastLine TO editor.CursorY + 1 STEP -1
-          IF ii < EDITOR_LINE_MAX THEN
-            editorText$(ii + 1) = editorText$(ii)
-          END IF
-        NEXT
-        editorText$(editor.CursorY + 1) = rightPart$
-        editor.CursorY = editor.CursorY + 1
-        editor.CursorX = 0
-        editor.LastLine = editor.LastLine + 1
-        IF editor.LastLine > EDITOR_LINE_MAX THEN editor.LastLine = EDITOR_LINE_MAX
-        refineCode (0)
-      END IF
-    END IF
-
-    IF kVal = 19200 THEN ' Left arrow
-      IF editor.CursorX > 0 THEN
-        editor.CursorX = editor.CursorX - 1
-      ELSE
-        IF editor.CursorY > 1 THEN ' Wrap to end of previous line
-          editor.CursorY = editor.CursorY - 1
-          editor.CursorX = LEN(editorText$(editor.CursorY))
-        END IF
-      END IF
-    END IF
-
-    IF kVal = 19712 THEN ' Right arrow
-      IF editor.CursorX < LEN(editorText$(editor.CursorY)) THEN
-        editor.CursorX = editor.CursorX + 1
-      ELSE
-        IF editor.CursorY < lastLine THEN ' Wrap to start of next line
-          editor.CursorY = editor.CursorY + 1
-          editor.CursorX = 0
-        END IF
-      END IF
-    END IF
-
-    IF kVal = 18432 THEN ' Up arrow
-      IF editor.CursorY > 1 THEN
-        editor.CursorY = editor.CursorY - 1
-        IF editor.CursorX > LEN(editorText$(editor.CursorY)) THEN
-          editor.CursorX = LEN(editorText$(editor.CursorY))
-        END IF
-      END IF
-    END IF
-
-    IF kVal = 20480 THEN ' Down arrow
-      IF editor.CursorY < lastLine THEN
-        editor.CursorY = editor.CursorY + 1
-        IF editor.CursorX > LEN(editorText$(editor.CursorY)) THEN
-          editor.CursorX = LEN(editorText$(editor.CursorY))
-        END IF
-      END IF
-    END IF
-
-    IF kVal = 18176 THEN ' Home key, go to start of line
-      editor.CursorX = 0
-    END IF
-
-    IF kVal = 20224 THEN ' End key, go to end of line
-      editor.CursorX = LEN(editorText$(editor.CursorY))
-    END IF
-
-    IF kVal = 18688 THEN ' Page up
-      IF _KEYDOWN(100305) OR _KEYDOWN(100306) THEN
-        editor.CursorY = 1
-        editor.CursorX = 0
-        editor.ScrollY = 1
-        editor.ScrollX = 0
-      ELSE
-        editor.CursorY = editor.CursorY - 28
-        IF editor.CursorY < 1 THEN editor.CursorY = 1
-        IF editor.CursorX > LEN(editorText$(editor.CursorY)) THEN editor.CursorX = LEN(editorText$(editor.CursorY))
-      END IF
-    END IF
-
-    IF kVal = 20736 THEN ' Page down
-      IF _KEYDOWN(100305) OR _KEYDOWN(100306) THEN
-        editor.CursorY = lastLine
-        editor.CursorX = LEN(editorText$(editor.CursorY))
-        editor.ScrollY = lastLine - 27
-        IF editor.ScrollY < 1 THEN editor.ScrollY = 1
-      ELSE
-        editor.CursorY = editor.CursorY + 28
-        IF editor.CursorY > lastLine THEN editor.CursorY = lastLine
-        IF editor.CursorX > LEN(editorText$(editor.CursorY)) THEN editor.CursorX = LEN(editorText$(editor.CursorY))
-      END IF
-    END IF
-
-    IF editor.CursorY < editor.ScrollY THEN editor.ScrollY = editor.CursorY
-    IF editor.CursorY >= editor.ScrollY + 28 THEN editor.ScrollY = editor.CursorY - 27
-
-    IF editor.CursorX < editor.ScrollX THEN editor.ScrollX = editor.CursorX
-    IF editor.CursorX >= editor.ScrollX + 56 THEN editor.ScrollX = editor.CursorX - 55
-
-    IF oldCursorY <> editor.CursorY THEN refineCode (0)
-
-  END IF
-
-END SUB ' processInput
+'' SUB processInput ' This is found within Z_EMLIBR.BLB
+'
+' Process input for the IDE
 
 ''''''''''''''''''''''''
 FUNCTION processVScrollbar (wPosX, wPosY, wSizeX, wSizeY, wTotalItems, wMaxVis, passCurScroll, passDragActive, passDragOffset, wIs1Based)
@@ -24874,7 +25377,6 @@ SUB refineCode (isCompileClick)
                   lastVarSuffix$ = suffixCh$
                 END IF
 
-                ' --- NEW EMERALD AUTO-FIX LOGIC ---
                 ' If Emerald mode is active, we track the variable on its FIRST sighting.
                 ' Whatever the user typed the first time dictates the variable's suffix permanently.
                 IF compileEmeraldMode = 1 THEN
@@ -25066,8 +25568,15 @@ FUNCTION resolveSymbol (vName$)
     EXIT FUNCTION
   END IF
 
-  ' Prevent internal variables starting with ! or ~ from using legacy type suffixes
   firstChar$ = LEFT$(searchName$, 1)
+
+  ' New Rule: User variables, arrays, and functions cannot start with _
+  IF firstChar$ = "_" THEN
+    throwCompilerError "IDENTIFIERS CANNOT START WITH _", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  ' Prevent internal variables starting with ! or ~ from using legacy type suffixes
   IF firstChar$ = "!" OR firstChar$ = "~" THEN
     lastChar$ = RIGHT$(searchName$, 1)
     IF lastChar$ = "#" OR lastChar$ = "!" OR lastChar$ = "%" OR lastChar$ = "&" THEN
@@ -27065,11 +27574,10 @@ SUB tira_EndAndProcess
           opPushReg 14 ' R14
           opPushReg 15 ' R15
 
-          ' --- STACK CANARY ---
+          ' Stack canary
           ' Push a known 64-bit canary value to detect buffer overflows in local variables
           ff = opMov(OP_TYPE_REG, 11, OP_TYPE_IMM, -559038737, 64) ' &HDEADBEEF
           opPushReg 11
-          ' --------------------
 
           ' Allocate the local stack frame using safe OS guard page probing
           tasm_ProbeStack allocSize
@@ -27085,7 +27593,7 @@ SUB tira_EndAndProcess
             opAddRsp32 allocSize
           END IF
 
-          ' --- STACK CANARY CHECK ---
+          '''' Stack canary check
           opPopReg 11
           ff = opMov(OP_TYPE_REG, 10, OP_TYPE_IMM, -559038737, 64) ' &HDEADBEEF
           ff = opALU(ALU_CMP, OP_TYPE_REG, 11, OP_TYPE_REG, 10, 64)
@@ -27094,7 +27602,6 @@ SUB tira_EndAndProcess
           IF ff = 1 THEN
             addPatch PATCH_GOTO, opJcc(JCC_JNE, JCC_MODE_FORWARD, 0, JCC_TYPE_NEAR), returnedData2
           END IF
-          ' --------------------------
 
           ' Pop non-volatile registers in reverse order to conform to x64 ABI
           opPopReg 15 ' R15
@@ -28271,7 +28778,7 @@ SUB tiraFatalError (errorText$)
     ' Release spinlock immediately in case crash occurred during a backbuffer swap
     tiraAssign "!G_WND_RENDER_LOCK_FLAG", "0"
 
-    ' --- RESTORE CORRUPTED WINDOW DIMENSIONS TO PREVENT MAIN THREAD STRETCHBLT CRASH ---
+    ' Restore corrupted window dimensions to prevent main thread stretchblt crash
     lblFixFs$ = tiraLabelCreateNew$("FATAL_FIX_FS")
     lblFixDone$ = tiraLabelCreateNew$("FATAL_FIX_DONE")
 
@@ -28292,7 +28799,6 @@ SUB tiraFatalError (errorText$)
     tiraNew TC_GET_RET, "!G_LAYOUT_WINDOW_H_VAL"
 
     tiraLabel lblFixDone$
-    ' -----------------------------------------------------------------------------------
 
     ' Sanitize the GDI text overlay counts to prevent the font from glitching out with garbage memory
     tiraAssign "!G_GFX_BUF_COUNT_FRONT_VAL", "0"
@@ -28782,6 +29288,13 @@ FUNCTION tiraParseExpression$ (startIdx, endIdx, allowImplicit)
   DIM tokIdx AS LONG
   DIM isUdtBase AS LONG
 
+  DIM currTargetType AS LONG
+  DIM currUdtIndex AS LONG
+  DIM currUdtOffset AS LONG
+  DIM currFieldSize AS LONG
+  DIM currIsDynamic AS LONG
+  DIM parseIdx AS LONG
+
   '''' Implicit typing lookahead
   ff = checkExpressionForString(startIdx, endIdx)
 
@@ -28853,7 +29366,15 @@ FUNCTION tiraParseExpression$ (startIdx, endIdx, allowImplicit)
               valTop = returnedData2
 
               IF topOp = SHUNT_ARRAY THEN
-                IF shuntOp(opTop).HasField = 1 THEN ix = ix + 2 ' Skip the '.' and 'FieldName'
+                IF shuntOp(opTop).HasField = 1 THEN
+                  DO WHILE ix + 1 <= endIdx
+                    IF lineTokenVals(ix + 1) = 256 + ASC(".") THEN
+                      ix = ix + 2
+                    ELSE
+                      EXIT DO
+                    END IF
+                  LOOP
+                END IF
               END IF
             END IF
           END IF
@@ -28985,25 +29506,37 @@ FUNCTION tiraParseExpression$ (startIdx, endIdx, allowImplicit)
                 shuntOp(opTop).TargetType = vDataType
                 shuntOp(opTop).UdtOffset = 0
                 shuntOp(opTop).HasField = 0
+                shuntOp(opTop).FieldSize = 0
+                shuntOp(opTop).IsDynamic = 0
 
                 ff = findMatchingParen(tokIdx, endIdx)
                 IF ff = 1 THEN
                   closeParen = returnedData2
-                  IF closeParen + 1 <= endIdx THEN
-                    IF lineTokenVals(closeParen + 1) = 256 + ASC(".") THEN
-                      IF closeParen + 2 <= endIdx THEN
-                        fieldName$ = UCASE$(lineTokens$(closeParen + 2))
-                        IF vDataType <> TYPE_UDT THEN
+                  currUdtIndex = symbols(vIdx).UDTIndex
+                  currTargetType = vDataType
+                  currUdtOffset = 0
+                  currFieldSize = 0
+                  currIsDynamic = 0
+
+                  parseIdx = closeParen + 1
+                  DO WHILE parseIdx <= endIdx
+                    IF lineTokenVals(parseIdx) = 256 + ASC(".") THEN
+                      IF parseIdx + 1 <= endIdx THEN
+                        fieldName$ = UCASE$(lineTokens$(parseIdx + 1))
+                        IF currTargetType <> TYPE_UDT THEN
                           throwCompilerError "VARIABLE IS NOT A UDT", ASIS, 0
                           tiraParseExpression$ = ""
                           EXIT FUNCTION
                         END IF
-                        uIdx = symbols(vIdx).UDTIndex
+                        uIdx = currUdtIndex
                         fieldFound = 0
                         FOR iField = 0 TO udts(uIdx).FieldCount - 1
                           IF RTRIM$(udtFields(uIdx, iField).FieldName) = fieldName$ THEN
-                            shuntOp(opTop).UdtOffset = udtFields(uIdx, iField).Offset
-                            shuntOp(opTop).TargetType = udtFields(uIdx, iField).DataType
+                            currUdtOffset = currUdtOffset + udtFields(uIdx, iField).Offset
+                            currTargetType = udtFields(uIdx, iField).DataType
+                            currUdtIndex = udtFields(uIdx, iField).UDTIndex
+                            currFieldSize = udtFields(uIdx, iField).Size
+                            currIsDynamic = udtFields(uIdx, iField).IsDynamicString
                             shuntOp(opTop).HasField = 1
                             fieldFound = 1
                             EXIT FOR
@@ -29014,9 +29547,20 @@ FUNCTION tiraParseExpression$ (startIdx, endIdx, allowImplicit)
                           tiraParseExpression$ = ""
                           EXIT FUNCTION
                         END IF
+                        parseIdx = parseIdx + 2
+                      ELSE
+                        throwCompilerError "EXPECTED FIELD NAME", ASIS, 0
+                        tiraParseExpression$ = ""
+                        EXIT FUNCTION
                       END IF
+                    ELSE
+                      EXIT DO
                     END IF
-                  END IF
+                  LOOP
+                  shuntOp(opTop).UdtOffset = currUdtOffset
+                  shuntOp(opTop).TargetType = currTargetType
+                  shuntOp(opTop).FieldSize = currFieldSize
+                  shuntOp(opTop).IsDynamic = currIsDynamic
                 END IF
 
                 opTop = opTop + 1
@@ -29027,21 +29571,17 @@ FUNCTION tiraParseExpression$ (startIdx, endIdx, allowImplicit)
             ' Isolate flat leaf for tiraParseFactor$ (Literal, Scalar, UDT Field)
             leafEnd = ix
             IF tVal = 0 THEN
-              IF ix + 1 <= endIdx THEN
-                IF lineTokenVals(ix + 1) = 256 + ASC(".") THEN
-                  IF ix + 2 <= endIdx THEN
-                    leafEnd = ix + 2
-                    ' Catch UDT field on a legacy dot variable
-                    IF ix + 3 <= endIdx THEN
-                      IF lineTokenVals(ix + 3) = 256 + ASC(".") THEN
-                        IF ix + 4 <= endIdx THEN
-                          leafEnd = ix + 4
-                        END IF
-                      END IF
-                    END IF
+              DO WHILE leafEnd + 1 <= endIdx
+                IF lineTokenVals(leafEnd + 1) = 256 + ASC(".") THEN
+                  IF leafEnd + 2 <= endIdx THEN
+                    leafEnd = leafEnd + 2
+                  ELSE
+                    EXIT DO
                   END IF
+                ELSE
+                  EXIT DO
                 END IF
-              END IF
+              LOOP
             END IF
 
             leafVar$ = tiraParseFactor$(ix, leafEnd, allowImplicit)
@@ -29133,7 +29673,15 @@ FUNCTION tiraParseExpression$ (startIdx, endIdx, allowImplicit)
               valTop = returnedData2
 
               IF topOp = SHUNT_ARRAY THEN
-                IF shuntOp(opTop).HasField = 1 THEN ix = ix + 2 ' Skip the '.' and 'FieldName'
+                IF shuntOp(opTop).HasField = 1 THEN
+                  DO WHILE ix + 1 <= endIdx
+                    IF lineTokenVals(ix + 1) = 256 + ASC(".") THEN
+                      ix = ix + 2
+                    ELSE
+                      EXIT DO
+                    END IF
+                  LOOP
+                END IF
               END IF
             END IF
           END IF
@@ -29308,6 +29856,13 @@ FUNCTION tiraParseFactor$ (startIdx, endIdx, allowImplicit)
   DIM tokIdx AS LONG
   DIM resVar$
   DIM isUdtBase AS LONG
+  DIM currUdtIndex AS LONG
+  DIM tempFieldSize AS LONG
+  DIM tempIsDynamicString AS LONG
+  DIM isFixedUdtString AS LONG
+  DIM descPtr$
+  DIM finalAddr$
+  DIM skipNullLbl$
 
   '''' Literals
   IF startIdx = endIdx THEN
@@ -29397,12 +29952,6 @@ FUNCTION tiraParseFactor$ (startIdx, endIdx, allowImplicit)
         END IF
       LOOP
 
-      ' 2. Real UDT Member Check
-      hasField = 0
-      IF tokIdx <= endIdx THEN
-        IF lineTokenVals(tokIdx) = 256 + ASC(".") THEN hasField = 1
-      END IF
-
       IF findSymbol(vName$) THEN
         vIdx = returnedData2
         vDataType = symbols(vIdx).DataType
@@ -29430,39 +29979,59 @@ FUNCTION tiraParseFactor$ (startIdx, endIdx, allowImplicit)
         END IF
       END IF
 
+      ' 2. Real UDT Member Check Iterative Walkdown
+      hasField = 0
       udtOffset = 0
       targetType = vDataType
+      currUdtIndex = symbols(vIdx).UDTIndex
 
-      IF hasField = 1 THEN
-        tokIdx = tokIdx + 1
-        IF tokIdx > endIdx THEN
-          throwCompilerError "EXPECTED FIELD NAME", ASIS, 0
-          tiraParseFactor$ = ""
-          EXIT FUNCTION
-        END IF
-        fieldName$ = UCASE$(lineTokens$(tokIdx))
-        tokIdx = tokIdx + 1
+      tempFieldSize = 0
+      tempIsDynamicString = 0
+      isFixedUdtString = 0
 
-        IF vDataType <> TYPE_UDT THEN
-          throwCompilerError "VARIABLE IS NOT A UDT", ASIS, 0
-          tiraParseFactor$ = ""
-          EXIT FUNCTION
-        END IF
-
-        uIdx = symbols(vIdx).UDTIndex
-        fieldFound = 0
-        FOR iField = 0 TO udts(uIdx).FieldCount - 1
-          IF RTRIM$(udtFields(uIdx, iField).FieldName) = fieldName$ THEN
-            udtOffset = udtFields(uIdx, iField).Offset
-            targetType = udtFields(uIdx, iField).DataType
-            fieldFound = 1
-            EXIT FOR
+      DO WHILE tokIdx <= endIdx
+        IF lineTokenVals(tokIdx) = 256 + ASC(".") THEN
+          hasField = 1
+          tokIdx = tokIdx + 1
+          IF tokIdx > endIdx THEN
+            throwCompilerError "EXPECTED FIELD NAME", ASIS, 0
+            tiraParseFactor$ = ""
+            EXIT FUNCTION
           END IF
-        NEXT
-        IF fieldFound = 0 THEN
-          throwCompilerError "UDT FIELD NOT FOUND", ASIS, 0
-          tiraParseFactor$ = ""
-          EXIT FUNCTION
+          fieldName$ = UCASE$(lineTokens$(tokIdx))
+          tokIdx = tokIdx + 1
+
+          IF targetType <> TYPE_UDT THEN
+            throwCompilerError "VARIABLE IS NOT A UDT", ASIS, 0
+            tiraParseFactor$ = ""
+            EXIT FUNCTION
+          END IF
+
+          fieldFound = 0
+          FOR iField = 0 TO udts(currUdtIndex).FieldCount - 1
+            IF RTRIM$(udtFields(currUdtIndex, iField).FieldName) = fieldName$ THEN
+              udtOffset = udtOffset + udtFields(currUdtIndex, iField).Offset
+              targetType = udtFields(currUdtIndex, iField).DataType
+              tempFieldSize = udtFields(currUdtIndex, iField).Size
+              tempIsDynamicString = udtFields(currUdtIndex, iField).IsDynamicString
+              currUdtIndex = udtFields(currUdtIndex, iField).UDTIndex
+              fieldFound = 1
+              EXIT FOR
+            END IF
+          NEXT
+          IF fieldFound = 0 THEN
+            throwCompilerError "UDT FIELD NOT FOUND", ASIS, 0
+            tiraParseFactor$ = ""
+            EXIT FUNCTION
+          END IF
+        ELSE
+          EXIT DO
+        END IF
+      LOOP
+
+      IF targetType = TYPE_STRING AND hasField = 1 THEN
+        IF tempIsDynamicString = 0 THEN
+          isFixedUdtString = 1
         END IF
       END IF
 
@@ -29495,13 +30064,20 @@ FUNCTION tiraParseFactor$ (startIdx, endIdx, allowImplicit)
             EXIT FUNCTION
           END IF
 
-          tiraNew TC_READ_MEM, resVar$ + ", " + finalAddr$
-
-          IF targetType = TYPE_STRING THEN
-            skipNullLbl$ = tiraLabelCreateNew$("SKIP_NULL")
-            tiraJmpCond "JNE", resVar$, "0", skipNullLbl$
-            tiraAssign resVar$, "!G_SYS_EMPTY_DESC$"
-            tiraLabel skipNullLbl$
+          IF isFixedUdtString = 1 THEN
+            ' Sythesize a dynamic descriptor representing the fixed data block so functions can process the string natively
+            resVar$ = tiraResolveHoistVar$("FSTR", "_DESC$")
+            descPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+            tiraAssign descPtr$, resVar$
+            tiraBuildStringDescriptor descPtr$, finalAddr$, LTRIM$(STR$(tempFieldSize)), "0"
+          ELSE
+            tiraNew TC_READ_MEM, resVar$ + ", " + finalAddr$
+            IF targetType = TYPE_STRING THEN
+              skipNullLbl$ = tiraLabelCreateNew$("SKIP_NULL")
+              tiraJmpCond "JNE", resVar$, "0", skipNullLbl$
+              tiraAssign resVar$, "!G_SYS_EMPTY_DESC$"
+              tiraLabel skipNullLbl$
+            END IF
           END IF
         END IF
       END IF
@@ -29615,7 +30191,7 @@ FUNCTION tiraParseRhsUdtBase$ (startTokIdx, exprEndBoundary, passLhsUdtIndex)
     isRhsUdtFound = 1
   END IF
 
-  IF rhsTokIdx <= exprEndBoundary THEN
+  DO WHILE rhsTokIdx <= exprEndBoundary
     IF lineTokenVals(rhsTokIdx) = 256 + ASC(".") THEN
       rhsTokIdx = rhsTokIdx + 1
       IF rhsTokIdx > exprEndBoundary THEN
@@ -29627,24 +30203,21 @@ FUNCTION tiraParseRhsUdtBase$ (startTokIdx, exprEndBoundary, passLhsUdtIndex)
       rhsFieldName$ = UCASE$(lineTokens$(rhsTokIdx))
       rhsTokIdx = rhsTokIdx + 1
 
-      IF symbols(rhsIdx).DataType <> TYPE_UDT THEN
+      IF isRhsUdtFound = 0 THEN
         throwCompilerErrorAndCancelTira "VARIABLE IS NOT A UDT", ASIS, 0
         tiraParseRhsUdtBase$ = ""
         EXIT FUNCTION
       END IF
 
-      rUIdx = symbols(rhsIdx).UDTIndex
       rFieldFound = 0
-      FOR iField = 0 TO udts(rUIdx).FieldCount - 1
-        IF RTRIM$(udtFields(rUIdx, iField).FieldName) = rhsFieldName$ THEN
-          rhsUdtOffset = udtFields(rUIdx, iField).Offset
-          IF udtFields(rUIdx, iField).DataType <> TYPE_UDT THEN
-            throwCompilerErrorAndCancelTira "TYPE MISMATCH", ASIS, 0
-            tiraParseRhsUdtBase$ = ""
-            EXIT FUNCTION
+      FOR iField = 0 TO udts(rhsUdtIndex).FieldCount - 1
+        IF RTRIM$(udtFields(rhsUdtIndex, iField).FieldName) = rhsFieldName$ THEN
+          rhsUdtOffset = rhsUdtOffset + udtFields(rhsUdtIndex, iField).Offset
+          IF udtFields(rhsUdtIndex, iField).DataType <> TYPE_UDT THEN
+            isRhsUdtFound = 0
+          ELSE
+            rhsUdtIndex = udtFields(rhsUdtIndex, iField).UDTIndex
           END IF
-          rhsUdtIndex = udtFields(rUIdx, iField).UDTIndex
-          isRhsUdtFound = 1
           rFieldFound = 1
           EXIT FOR
         END IF
@@ -29655,11 +30228,13 @@ FUNCTION tiraParseRhsUdtBase$ (startTokIdx, exprEndBoundary, passLhsUdtIndex)
         tiraParseRhsUdtBase$ = ""
         EXIT FUNCTION
       END IF
+    ELSE
+      EXIT DO
     END IF
-  END IF
+  LOOP
 
   IF isRhsUdtFound = 0 THEN
-    throwCompilerErrorAndCancelTira "RHS IS NOT A UDT", ASIS, 0
+    throwCompilerErrorAndCancelTira "RHS MUST BE A UDT", ASIS, 0
     tiraParseRhsUdtBase$ = ""
     EXIT FUNCTION
   END IF
@@ -30022,6 +30597,7 @@ FUNCTION tiraScheduleFuncOrArray (passOpTop AS LONG, passValTop AS LONG)
   DIM idxVar$
   DIM srcIsComplex AS LONG
   DIM firstChar$
+  DIM descPtr$
 
   opVal = shuntOp(passOpTop).OpCode
   argCount = shuntOp(passOpTop).ArgCount
@@ -30155,13 +30731,22 @@ FUNCTION tiraScheduleFuncOrArray (passOpTop AS LONG, passValTop AS LONG)
 
         finalAddr$ = tiraFrontendCalcAddress$(RTRIM$(symbols(vIdx).RecordName), indicesStr$, udtOffset)
         resVar$ = tiraDimVar$("T", targetType)
-        tiraNew TC_READ_MEM, resVar$ + ", " + finalAddr$
 
-        IF targetType = TYPE_STRING THEN
-          skipNullLbl$ = tiraLabelCreateNew$("SKIP_NULL")
-          tiraJmpCond "JNE", resVar$, "0", skipNullLbl$
-          tiraAssign resVar$, "!G_SYS_EMPTY_DESC$"
-          tiraLabel skipNullLbl$
+        IF targetType = TYPE_STRING AND shuntOp(passOpTop).HasField = 1 AND shuntOp(passOpTop).IsDynamic = 0 THEN
+          ' Synthesize a dynamic descriptor representing the fixed data block from the array layout
+          resVar$ = tiraResolveHoistVar$("FSTR", "_DESC$")
+          descPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+          tiraAssign descPtr$, resVar$
+          tiraBuildStringDescriptor descPtr$, finalAddr$, LTRIM$(STR$(shuntOp(passOpTop).FieldSize)), "0"
+        ELSE
+          tiraNew TC_READ_MEM, resVar$ + ", " + finalAddr$
+
+          IF targetType = TYPE_STRING THEN
+            skipNullLbl$ = tiraLabelCreateNew$("SKIP_NULL")
+            tiraJmpCond "JNE", resVar$, "0", skipNullLbl$
+            tiraAssign resVar$, "!G_SYS_EMPTY_DESC$"
+            tiraLabel skipNullLbl$
+          END IF
         END IF
       END IF
 
@@ -31162,6 +31747,7 @@ SUB tokenizeLine (wLine$)
         IF uIdentSearch$ = "_SINGLE" THEN uIdentSearch$ = "SINGLE"
         IF uIdentSearch$ = "_DOUBLE" THEN uIdentSearch$ = "DOUBLE"
         IF uIdentSearch$ = "_STRING" THEN uIdentSearch$ = "STRING"
+        IF uIdentSearch$ = "_DSTRING" THEN uIdentSearch$ = "DSTRING"
         IF uIdentSearch$ = "_UNSIGNED" THEN uIdentSearch$ = "UNSIGNED"
         IF uIdentSearch$ = "_ANY" THEN uIdentSearch$ = "ANY"
 
@@ -31181,6 +31767,9 @@ SUB tokenizeLine (wLine$)
           throwCompilerError "TOKEN LIMIT", ASIS, 0
           EXIT SUB
         END IF
+
+        ' Reverted back to the original layout: The strict underscore check has been removed from here
+        ' and relocated to resolveSymbol and the compilePass4 declarations to allow ignored commands to pass!
         IF isKey = 1 THEN
           lineTokens$(lineTokenCount) = CHR$(kwVal \ 256) + CHR$(kwVal AND 255)
         ELSE
