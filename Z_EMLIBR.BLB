@@ -1,0 +1,3177 @@
+' Z_EMLIRB.BLB This is the external library file for EmeraldBasic
+' The line with comment, dollar sign, and INCLUDE Z_EMLIBR.BLB at the end of the EmeraldBasic file link this code in
+
+''''''''''''''''''''''''
+'' SUB a_Main ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB addIntrinsic (passKw$, passReturnType) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB addKeyword (passKw$, passTokVal, passIsPre) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB addPatch (passType, passOffset, passTargetInt) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION addStackSpace (wSize) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB addStatusMsg (wMsg$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB adjustAllPatchOffsets (offsetDiff, userPatchCnt, userIatPatchCnt, userGotoPatchCnt, userCallPatchCnt, userRtPatchCnt, userSubCnt, userSymbolCnt) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION alignStackFrame ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB arrayPadNumBytes (wCount, wValue) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB arrayPadUpTo (wAddress, wValue) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB arrayWrite16LE (wVal) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB arrayWrite32F (wVal AS SINGLE) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB arrayWrite32LE (wVal AS _UNSIGNED LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB arrayWrite64F (wVal AS DOUBLE) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB arrayWriteCharString (wStr$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB buildImportTable ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION calcRex (opSize AS LONG, regR AS LONG, regB AS LONG, regX AS LONG) ' This is in the main file
+
+'''''''''''''''''''''''
+SUB checkEmergencyClose
+
+  closeBtnW = 15
+  closeBtnX = SCREENSIZEX - closeBtnW
+  closeBtnY = 0
+  closeBtnH = 13
+
+  mouseReadInput
+  IF mouseClickedInBox(closeBtnX, closeBtnY, closeBtnW, closeBtnH) THEN
+    throwCompilerError "ABORTED BY USER", ASIS, 0
+    editor.TopMenuFocus = 4
+    editor.Focus = 0
+    editor.MenuClicked = 1
+  END IF
+
+END SUB ' checkEmergencyClose
+
+''''''''''''''''''''''''
+'' FUNCTION checkExpressionForString (startIdx, endIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION checkIfPreprocessorKeyword (passCheckDir$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB checkRegisterBounds (wReg, wName$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB collapseTokens (startIdx, endIdx, repVar$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION compile ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB compilePass1LexiConsts ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION compilePass2Flatten ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB compilePass3Scan ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB compilePass4Symbols ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB compilePass5ScanOrEmit ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB compilePass5bLocalVariables ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB compilePass6GlobalMap ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB compileWrapUp ' This is in the main file
+
+''''''''''''''''''''''''
+SUB confirmExit
+
+  drawBorderBox (SCREENSIZEX \ 2) - 156, (SCREENSIZEY \ 2) - 20, 312, 40, 15, 0
+  PrintStr (SCREENSIZEX \ 2) - 148, (SCREENSIZEY \ 2) - 4, "PRESS ESC TO CONFIRM, SPACE TO CANCEL", 14, 0, 0
+  _DISPLAY
+
+  DO
+    limitSpeed
+    mouseReadInput
+
+    kVal = keyCheck("ESC")
+    IF kVal = 27 THEN
+      ESCAPETEXT "PROGRAM ENDED"
+    END IF
+
+    kVal2 = keyCheck("SPACE")
+    IF kVal2 = 32 THEN
+      DO WHILE _KEYDOWN(32)
+        limitSpeed
+      LOOP
+      EXIT DO
+    END IF
+  LOOP
+
+END SUB ' confirmExit
+
+''''''''''''''''''''''''
+'' SUB createFont ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION cTrNum$ (wNum) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB deleteSelection ' This is in the main file
+
+''''''''''''''''''''''''
+SUB displayFlashText
+
+  IF flashTextTimer > 0 THEN
+    COLOR sysColor.flashTextClr
+    flashTextTimer = flashTextTimer - 1
+    PrintTextLineWithBanners flashText$, sysColor.flashTextClr, BOTTOM
+  END IF
+
+END SUB ' displayFlashText
+
+''''''''''''''''''''''''
+SUB drawBorderBox (wPosX, wPosY, wSizeX, wSizeY, fgClr, bgClr)
+
+  IF wSizeX <= 1 THEN EXIT SUB
+  IF wSizeY <= 1 THEN EXIT SUB
+
+  endX = wPosX + wSizeX - 1
+  endY = wPosY + wSizeY - 1
+
+  IF endX > SCREENSIZEX - 1 THEN endX = SCREENSIZEX - 1
+  IF endY > SCREENSIZEY - 1 THEN endY = SCREENSIZEY - 1
+
+  LINE (wPosX, wPosY)-(endX, endY), fgClr, B
+  LINE (wPosX + 1, wPosY + 1)-(endX - 1, endY - 1), bgClr, BF
+
+END SUB ' drawBorderBox
+
+''''''''''''''''''''''''
+SUB drawButtonsPMI
+
+  editorBoxTop = editor.StartY
+
+  funcListBoxH = (13 * 10) + 4
+
+  ' Fast check to determine if file has code without looping over thousands of lines every frame
+  hasCode = 0
+  IF editor.LastLine > 1 THEN
+    hasCode = 1
+  ELSE
+    IF LTRIM$(RTRIM$(editorText$(1))) <> "" THEN hasCode = 1
+  END IF
+
+  btnSaveTxtW = 122
+  btnSaveTxtH = 20
+  btnSaveTxtX = RIGHT_BOX_X
+  btnSaveTxtY = editorBoxTop + funcListBoxH + 8
+
+  IF hasCode = 0 THEN
+    btnSaveTxtBg = sysColor.gray
+  ELSE
+    btnSaveTxtBg = editor.windowBarClr
+  END IF
+
+  drawBorderBox btnSaveTxtX, btnSaveTxtY, btnSaveTxtW, btnSaveTxtH, 15, btnSaveTxtBg
+  PrintStr btnSaveTxtX + 28, btnSaveTxtY + 6, "SAVE FAST", 15, 0, 1
+
+  btnLoadTxtW = 122
+  btnLoadTxtH = 20
+  btnLoadTxtX = btnSaveTxtX
+  btnLoadTxtY = btnSaveTxtY + btnSaveTxtH + 8
+
+  drawBorderBox btnLoadTxtX, btnLoadTxtY, btnLoadTxtW, btnLoadTxtH, 15, editor.windowBarClr
+  PrintStr btnLoadTxtX + 28, btnLoadTxtY + 6, "LOAD FAST", 15, 0, 1
+
+  btnCompileW = 122
+  btnCompileH = 20
+  btnCompileX = btnSaveTxtX
+  btnCompileY = btnLoadTxtY + btnLoadTxtH + 8
+
+  IF compileState <> COMP_IDLE OR hasCode = 0 THEN
+    btnCompileBg = sysColor.gray
+  ELSE
+    btnCompileBg = editor.windowBarClr
+  END IF
+
+  drawBorderBox btnCompileX, btnCompileY, btnCompileW, btnCompileH, 15, btnCompileBg
+  PrintStr btnCompileX + 33, btnCompileY + 6, "COMPILE", 15, 0, 1
+
+  btnSearchW = 122
+  btnSearchH = 20
+  btnSearchX = btnSaveTxtX
+  btnSearchY = btnCompileY + btnCompileH + 8
+
+  IF hasCode = 0 THEN
+    btnSearchBg = sysColor.gray
+  ELSE
+    btnSearchBg = editor.windowBarClr
+  END IF
+
+  drawBorderBox btnSearchX, btnSearchY, btnSearchW, btnSearchH, 15, btnSearchBg
+  PrintStr btnSearchX + 37, btnSearchY + 6, "SEARCH", 15, 0, 1
+
+  IF mouseClickedInBox(btnSaveTxtX, btnSaveTxtY, btnSaveTxtW, btnSaveTxtH) THEN
+    IF hasCode = 1 THEN
+      editor.Focus = 1
+      addStatusMsg "SAVING " + fileNameCode$ + "..."
+
+      ' Provide immediate visual feedback that the save process is active
+      drawBorderBox btnSaveTxtX, btnSaveTxtY, btnSaveTxtW, btnSaveTxtH, 15, sysColor.gray
+      PrintStr btnSaveTxtX + 28, btnSaveTxtY + 6, "SAVE FAST", 15, 0, 1
+
+      ' Complete the rest of the screen pipeline before halting for I/O
+      drawStatusPMI
+      drawTopMenuAndScrollPMI
+      drawFuncListPMI
+      drawCornerPMI
+      PrintStr SCREENSIZEX - 72, SCREENSIZEY - 48, "MSX:" + cTrNum$(mouse.PosX), 15, 0, 1
+      PrintStr SCREENSIZEX - 72, SCREENSIZEY - 36, "MSY:" + cTrNum$(mouse.PosY), 15, 0, 1
+      PrintStr SCREENSIZEX - 72, SCREENSIZEY - 24, "CX:" + cTrNum$(editor.CursorX), 15, 0, 1
+      PrintStr SCREENSIZEX - 72, SCREENSIZEY - 12, "CY:" + cTrNum$(editor.CursorY), 15, 0, 1
+      displayFlashText
+      _DISPLAY
+
+      fileCodeSave
+
+      ' The normal redrawAll pipeline will complete after this function returns, restoring the blue button seamlessly
+      addStatusMsg "SAVED " + fileNameCode$
+    END IF
+  END IF
+
+  IF mouseClickedInBox(btnLoadTxtX, btnLoadTxtY, btnLoadTxtW, btnLoadTxtH) THEN
+    editor.Focus = 1
+    IF _FILEEXISTS(fileNameCode$) THEN
+      addStatusMsg "LOADING " + fileNameCode$ + "..."
+
+      ' Provide immediate visual feedback that the load process is active
+      drawBorderBox btnLoadTxtX, btnLoadTxtY, btnLoadTxtW, btnLoadTxtH, 15, sysColor.gray
+      PrintStr btnLoadTxtX + 28, btnLoadTxtY + 6, "LOAD FAST", 15, 0, 1
+
+      ' Complete the rest of the screen pipeline before halting for I/O
+      drawStatusPMI
+      drawTopMenuAndScrollPMI
+      drawFuncListPMI
+      drawCornerPMI
+      PrintStr SCREENSIZEX - 72, SCREENSIZEY - 48, "MSX:" + cTrNum$(mouse.PosX), 15, 0, 1
+      PrintStr SCREENSIZEX - 72, SCREENSIZEY - 36, "MSY:" + cTrNum$(mouse.PosY), 15, 0, 1
+      PrintStr SCREENSIZEX - 72, SCREENSIZEY - 24, "CX:" + cTrNum$(editor.CursorX), 15, 0, 1
+      PrintStr SCREENSIZEX - 72, SCREENSIZEY - 12, "CY:" + cTrNum$(editor.CursorY), 15, 0, 1
+      displayFlashText
+      _DISPLAY
+
+      fileCodeLoad
+      refineCode 0,0
+
+      editor.CursorX = 0
+      editor.CursorY = 1
+      editor.ScrollY = 1
+      editor.ScrollX = 0
+      editor.SelectStartX = 0
+      editor.SelectStartY = 1
+      editor.IsSelecting = 0
+      editor.Focus = 1
+
+      addStatusMsg "LOADED " + fileNameCode$
+    ELSE
+      throwCompilerError fileNameCode$ + " DOES NOT EXIST", ASIS, 0
+    END IF
+  END IF
+
+  IF mouseClickedInBox(btnCompileX, btnCompileY, btnCompileW, btnCompileH) THEN
+    IF compileState = COMP_IDLE AND hasCode = 1 THEN
+      editor.Focus = 1
+      statusMsgCount = 1
+      editor.StatusScrollY = 1
+      editor.StatusSelectedIndex = 0
+      FOR ii = 1 TO 999
+        statusMsg$(ii) = ""
+      NEXT
+      compileState = COMP_REFINE
+      addStatusMsg "REFINING..."
+
+      ' Provide immediate visual feedback that the compile process is active
+      drawBorderBox btnCompileX, btnCompileY, btnCompileW, btnCompileH, 15, sysColor.gray
+      PrintStr btnCompileX + 33, btnCompileY + 6, "COMPILE", 15, 0, 1
+
+      ' Complete the rest of the screen pipeline before the next loop blocks in processCompileState
+      drawStatusPMI
+      drawTopMenuAndScrollPMI
+      drawFuncListPMI
+      drawCornerPMI
+      PrintStr SCREENSIZEX - 72, SCREENSIZEY - 48, "MSX:" + cTrNum$(mouse.PosX), 15, 0, 1
+      PrintStr SCREENSIZEX - 72, SCREENSIZEY - 36, "MSY:" + cTrNum$(mouse.PosY), 15, 0, 1
+      PrintStr SCREENSIZEX - 72, SCREENSIZEY - 24, "CX:" + cTrNum$(editor.CursorX), 15, 0, 1
+      PrintStr SCREENSIZEX - 72, SCREENSIZEY - 12, "CY:" + cTrNum$(editor.CursorY), 15, 0, 1
+      displayFlashText
+      _DISPLAY
+    END IF
+  END IF
+
+  IF mouseClickedInBox(btnSearchX, btnSearchY, btnSearchW, btnSearchH) THEN
+    IF hasCode = 1 THEN
+      editor.Focus = 1
+      searchModal
+    END IF
+  END IF
+
+END SUB ' drawButtonsPMI
+
+''''''''''''''''''''''''
+SUB drawClearBox (wPosX, wPosY, wSizeX, wSizeY, fgClr)
+
+  IF wSizeX <= 1 THEN EXIT SUB
+  IF wSizeY <= 1 THEN EXIT SUB
+
+  endX = wPosX + wSizeX - 1
+  endY = wPosY + wSizeY - 1
+
+  IF endX > SCREENSIZEX - 1 THEN endX = SCREENSIZEX - 1
+  IF endY > SCREENSIZEY - 1 THEN endY = SCREENSIZEY - 1
+
+  LINE (wPosX, wPosY)-(endX, endY), fgClr, B
+
+END SUB ' drawClearBox
+
+''''''''''''''''''''''''
+SUB drawCornerPMI
+
+  closeBtnW = 15
+  closeBtnX = SCREENSIZEX - closeBtnW
+  closeBtnY = 0
+  closeBtnH = 13
+
+  dropW = 35
+  dropH = 15
+  dropX = SCREENSIZEX - dropW
+  dropY = 12
+
+  minW = 16
+  minH = 15
+  minX = dropX - minW + 1
+  minY = 12
+
+  blankX = minX
+  blankW = closeBtnX - minX + 1
+  blankY = 0
+  blankH = 13
+
+  IF editor.TopMenuFocus = 4 THEN
+    drawBorderBox closeBtnX, closeBtnY, closeBtnW, closeBtnH, 15, sysColor.gray
+    PrintStr closeBtnX + 4, closeBtnY + 3, "?", 15, 0, 1
+  ELSE
+    drawBorderBox closeBtnX, closeBtnY, closeBtnW, closeBtnH, 15, editor.CloseClr
+    PrintStr closeBtnX + 4, closeBtnY + 3, "X", 15, 0, 1
+  END IF
+
+  IF editor.TopMenuFocus = 4 OR isFullscreen = 0 THEN
+    drawBorderBox blankX, blankY, blankW, blankH, 15, editor.windowBarClr
+    IF mouseWithinBoxBounds(blankX, blankY, blankW, blankH) THEN
+      drawClearBox blankX + 1, blankY + 1, blankW - 2, blankH - 2, 9
+    END IF
+    PrintStr blankX + 6, blankY + 3, "RES", 15, 0, 1
+  END IF
+
+  IF editor.TopMenuFocus = 4 THEN
+    drawBorderBox dropX, dropY, dropW, dropH, 15, editor.windowBarClr
+    ' Use dropY + 1 and dropH - 1 for hit detection to keep Y=12 for the top row
+    IF mouseWithinBoxBounds(dropX, dropY + 1, dropW, dropH - 1) THEN
+      drawClearBox dropX + 1, dropY + 1, dropW - 2, dropH - 2, editor.CloseClr
+    END IF
+    PrintStr dropX + 6, dropY + 4, "END", 15, 0, 1
+
+    drawBorderBox minX, minY, minW, minH, 15, editor.windowBarClr
+    ' Use minY + 1 and minH - 1 for hit detection to keep Y=12 for the top row
+    IF mouseWithinBoxBounds(minX, minY + 1, minW, minH - 1) THEN
+      drawClearBox minX + 1, minY + 1, minW - 2, minH - 2, 9
+    END IF
+    PrintChr minX + 4, minY + 4, CHR$(25), 15, 0, 1
+
+    ' Shadow effect on the left and bottom edges of the expanded popup
+    LINE (minX - 1, 0)-(minX - 1, dropY + dropH), 0
+    LINE (minX - 1, dropY + dropH)-(dropX + dropW - 1, dropY + dropH), 0
+
+    IF keyCheck("SPACE") THEN
+      editor.MenuClicked = 1
+      IF isFullscreen = 0 THEN
+        isFullscreen = 1
+        _FULLSCREEN _SQUAREPIXELS
+      ELSE
+        isFullscreen = 0
+        _FULLSCREEN _OFF
+      END IF
+      editor.TopMenuFocus = 0
+      waitKeyRelease "SPACE"
+    END IF
+
+    IF keyCheck("*") THEN
+      editor.MenuClicked = 1
+      drawClearBox dropX + 1, dropY + 1, dropW - 2, dropH - 2, editor.CloseClr
+      _DISPLAY
+      waitTimer 0.1
+      ESCAPETEXT "PROGRAM ENDED"
+    END IF
+  END IF
+
+  IF mouseClickedInBox(closeBtnX, closeBtnY, closeBtnW, closeBtnH) THEN
+    IF editor.TopMenuFocus = 4 THEN
+      editor.TopMenuFocus = 0
+    ELSE
+      editor.TopMenuFocus = 4
+      editor.Focus = 0
+    END IF
+    editor.MenuClicked = 1
+  END IF
+
+  IF editor.TopMenuFocus = 4 OR isFullscreen = 0 THEN
+    IF mouseClickedInBox(blankX, blankY, blankW, blankH) THEN
+      editor.MenuClicked = 1
+      IF isFullscreen = 0 THEN
+        isFullscreen = 1
+        _FULLSCREEN _SQUAREPIXELS
+      ELSE
+        isFullscreen = 0
+        _FULLSCREEN _OFF
+      END IF
+      editor.TopMenuFocus = 0
+    END IF
+  END IF
+
+  IF editor.TopMenuFocus = 4 THEN
+    IF mouseClickedInBox(dropX, dropY + 1, dropW, dropH - 1) THEN
+      editor.MenuClicked = 1
+      mouse.Released1 = 0
+      ESCAPETEXT "PROGRAM ENDED"
+    END IF
+
+    IF mouseClickedInBox(minX, minY + 1, minW, minH - 1) THEN
+      editor.MenuClicked = 1
+      _SCREENICON
+      editor.TopMenuFocus = 0
+    END IF
+
+    IF mouseClickedInBox(SCREENSIZEX - 35, 0, 35, 27) THEN editor.MenuClicked = 1
+  END IF
+
+END SUB ' drawCornerPMI
+
+''''''''''''''''''''''''
+SUB drawEditorPMI
+
+  editorBoxTop = editor.StartY
+  editorBoxY = editorBoxTop + 3
+
+  editorTextX = EDITOR_BOX_X + LEFT_SPACING
+  editorTextW = 56 * 8
+
+  textRows = 28
+  textH = textRows * 10
+  editorBoxH = textH + 3
+
+  editorScrollBarX = editorTextX + editorTextW + 3
+  editorScrollBarY = editorBoxTop
+  editorScrollBarW = 10
+
+  hScrollY = editorBoxY + textH
+  hScrollX = 1
+  hScrollW = (editorScrollBarX + editorScrollBarW) - hScrollX
+
+  IF editor.Focus = 1 THEN
+    focusX = 0
+    focusY = editorBoxTop - 1
+    focusW = (editorScrollBarX + editorScrollBarW + 1) - focusX
+    focusH = (editorBoxH + 8) + 2
+    drawClearBox focusX, focusY, focusW, focusH, sysColor.focusBorder
+  END IF
+
+  newBoxX = 1
+  newBoxW = (editorScrollBarX + editorScrollBarW) - newBoxX
+  drawBorderBox newBoxX, editorBoxTop, newBoxW, editorBoxH + 8, 15, 0
+
+  LINE (EDITOR_BOX_X, editorBoxTop)-(EDITOR_BOX_X, editorBoxTop + editorBoxH + 7), 15
+
+  IF editor.Focus = 1 THEN
+    LINE (EDITOR_BOX_X - 1, editorBoxTop + 1)-(EDITOR_BOX_X - 1, hScrollY - 1), sysColor.focusBorder
+  END IF
+
+  ' Draw Horizontal Scrollbar
+  drawBorderBox hScrollX, hScrollY, hScrollW, 8, 15, 0
+  PrintChr hScrollX + 2, hScrollY, CHR$(17), 15, 0, 1
+  PrintChr hScrollX + hScrollW - 9, hScrollY, CHR$(16), 15, 0, 1
+
+  ' Calculate maxLen for horizontal scrolling incrementally to prevent severe framerate drops on large programs
+  STATIC scanIdx AS LONG
+  STATIC cachedMaxLen AS LONG
+  STATIC tempMaxLen AS LONG
+
+  maxLen = 0
+  scanEnd = editor.ScrollY + textRows
+  IF scanEnd > editor.LastLine THEN scanEnd = editor.LastLine
+
+  ' 1. Always evaluate the visible window immediately so current edits update the scrollbar instantly
+  FOR iy = editor.ScrollY TO scanEnd
+    i2 = LEN(editorText$(iy))
+    IF i2 > maxLen THEN maxLen = i2
+  NEXT
+
+  ' 2. Evaluate the rest of the file in the background (1000 lines per frame)
+  FOR stepIdx = 1 TO 1000
+    scanIdx = scanIdx + 1
+    IF scanIdx > editor.LastLine THEN
+      cachedMaxLen = tempMaxLen
+      tempMaxLen = 0
+      scanIdx = 1
+    END IF
+    i2 = LEN(editorText$(scanIdx))
+    IF i2 > tempMaxLen THEN tempMaxLen = i2
+  NEXT
+
+  IF cachedMaxLen > maxLen THEN maxLen = cachedMaxLen
+  IF tempMaxLen > maxLen THEN maxLen = tempMaxLen
+
+  maxScrollX = maxLen - 56 + 2
+  IF maxScrollX < 0 THEN maxScrollX = 0
+  IF editor.ScrollX > maxScrollX THEN editor.ScrollX = maxScrollX
+
+  ' Draw H-Scroll thumb
+  thumbWEd = hScrollW - 20
+  IF maxScrollX = 0 THEN
+    thumbSizeX = thumbWEd
+    thumbXEd = hScrollX + 10
+  ELSE
+    thumbSizeX = (56 * thumbWEd) \ (maxLen + 2)
+    IF thumbSizeX < 8 THEN thumbSizeX = 8
+    thumbXEd = hScrollX + 10 + ((editor.ScrollX * (thumbWEd - thumbSizeX)) \ maxScrollX)
+  END IF
+  LINE (thumbXEd, hScrollY + 1)-(thumbXEd + thumbSizeX - 1, hScrollY + 6), 15, BF
+
+  FOR iy = 0 TO textRows - 1
+    actualY = iy + editor.ScrollY
+    lineNum = actualY
+    numStr$ = LTRIM$(RTRIM$(STR$(lineNum)))
+    numPosX = (EDITOR_BOX_X - 4) - (LEN(numStr$) * 8) ' Leaves exactly 4 pixels to of gap between the left white line and the text
+
+    IF actualY = editor.CursorY THEN
+      lineColor = 15
+    ELSE
+      lineColor = 11
+    END IF
+
+    PrintStr numPosX, editorBoxY + (iy * 10) + 1, numStr$, lineColor, 0, 1
+
+    IF editor.IsSelecting = 1 THEN
+      IF editor.SelectStartY < editor.CursorY OR (editor.SelectStartY = editor.CursorY AND editor.SelectStartX < editor.CursorX) THEN
+        startY = editor.SelectStartY
+        startX = editor.SelectStartX
+        endY = editor.CursorY
+        endX = editor.CursorX
+      ELSE
+        startY = editor.CursorY
+        startX = editor.CursorX
+        endY = editor.SelectStartY
+        endX = editor.SelectStartX
+      END IF
+
+      IF actualY >= startY AND actualY <= endY THEN
+        lineLen = LEN(editorText$(actualY))
+        hlStartX = 0
+        hlEndX = lineLen
+
+        IF actualY = startY THEN hlStartX = startX
+        IF actualY = endY THEN hlEndX = endX
+        IF actualY < endY THEN hlEndX = lineLen + 1
+
+        hlStartX = hlStartX - editor.ScrollX
+        hlEndX = hlEndX - editor.ScrollX
+
+        IF hlStartX < 0 THEN hlStartX = 0
+        IF hlEndX > 56 THEN hlEndX = 56
+
+        IF hlStartX < hlEndX THEN
+          LINE (editorTextX + (hlStartX * 8), editorBoxY + (iy * 10))-(editorTextX + (hlEndX * 8) - 1, editorBoxY + (iy * 10) + 9), 1, BF
+        END IF
+      END IF
+    END IF
+
+    IF actualY <= EDITOR_LINE_MAX THEN
+      IF editorText$(actualY) <> "" THEN
+        printText$ = MID$(editorText$(actualY), editor.ScrollX + 1, 56)
+        PrintStr editorTextX, editorBoxY + (iy * 10) + 1, printText$, 15, 0, 1
+      END IF
+    END IF
+  NEXT
+
+  IF editor.Focus = 1 THEN
+    IF editor.CursorY >= editor.ScrollY AND editor.CursorY < editor.ScrollY + textRows THEN
+      IF editor.CursorX >= editor.ScrollX AND editor.CursorX < editor.ScrollX + 56 THEN
+        cursorPixelX = editorTextX + ((editor.CursorX - editor.ScrollX) * 8)
+        cursorPixelY = editorBoxY + ((editor.CursorY - editor.ScrollY) * 10) + 1
+
+        cursorBlink = INT(TIMER * 2) AND 1
+        IF cursorBlink = 1 THEN
+          PrintChr cursorPixelX, cursorPixelY, "*", 14, 0, 1
+        ELSE
+          PrintChr cursorPixelX, cursorPixelY, "_", 14, 0, 1
+        END IF
+      END IF
+    END IF
+  END IF
+
+  ' Mouse Processing Logic
+  lastLine = editor.LastLine
+  IF editor.CursorY > lastLine THEN lastLine = editor.CursorY
+
+  IF mouse.Wheel <> 0 THEN
+    IF mouseWithinBoxBounds(editorTextX, editorBoxTop, editorTextW + editorScrollBarW + 4, editorBoxH + 8) THEN
+      editor.Focus = 1
+      editor.ScrollY = editor.ScrollY + mouse.Wheel
+      maxScroll = lastLine - 27
+      IF maxScroll < 1 THEN maxScroll = 1
+      IF editor.ScrollY > maxScroll THEN editor.ScrollY = maxScroll
+      IF editor.ScrollY < 1 THEN editor.ScrollY = 1
+    END IF
+  END IF
+
+  IF mouse.Clicked1 THEN
+    lastActionWasTyping = 0
+    editor.DragActive = 0
+    editor.ScrollDragActiveX = 0
+
+    IF mouseWithinBoxBounds(editorTextX, editorBoxY, editorTextW, textH) THEN
+      editor.DragActive = 1
+      editor.Focus = 1
+      clickRelX = mouse.PosX - editorTextX
+      clickRelY = mouse.PosY - editorBoxY
+      newCX = (clickRelX \ 8) + editor.ScrollX
+      newCY = (clickRelY \ 10) + editor.ScrollY
+
+      IF newCY <> editor.CursorY THEN
+        refineCode editor.CursorY, 0
+      END IF
+
+      IF newCY > lastLine THEN newCY = lastLine
+
+      lineLength = LEN(editorText$(newCY))
+      IF newCX > lineLength THEN newCX = lineLength
+
+      IF _KEYDOWN(100303) OR _KEYDOWN(100304) THEN
+        IF editor.IsSelecting = 0 THEN
+          editor.SelectStartX = editor.CursorX
+          editor.SelectStartY = editor.CursorY
+          editor.IsSelecting = 1
+        END IF
+        editor.CursorX = newCX
+        editor.CursorY = newCY
+      ELSE
+        IF editor.TextClickActive = 1 AND (TIMER - editor.TextLastClickTime) < 0.3 THEN
+          editor.TextClickActive = 0 ' Reset to prevent triple-click looping
+          editor.DragActive = 0 ' Disable drag logic to prevent immediate overwrite of the right-bound selection
+
+          lineStr$ = editorText$(newCY)
+          lineLen = LEN(lineStr$)
+
+          IF lineLen > 0 THEN
+            clickPos = newCX + 1
+            IF clickPos > lineLen THEN clickPos = lineLen
+
+            ch$ = MID$(lineStr$, clickPos, 1)
+            cType = 3
+            IF ch$ = " " OR ch$ = CHR$(9) THEN
+              cType = 1
+            ELSE
+              IF INSTR("(),=+-*/\" + CHR$(34) + ":<>';[]{}", ch$) > 0 THEN
+                cType = 2
+              END IF
+            END IF
+
+            leftBound = clickPos - 1
+            DO WHILE leftBound > 0
+              ch$ = MID$(lineStr$, leftBound, 1)
+              lType = 3
+              IF ch$ = " " OR ch$ = CHR$(9) THEN
+                lType = 1
+              ELSE
+                IF INSTR("(),=+-*/\" + CHR$(34) + ":<>';[]{}", ch$) > 0 THEN
+                  lType = 2
+                END IF
+              END IF
+              IF lType <> cType THEN EXIT DO
+              leftBound = leftBound - 1
+            LOOP
+
+            rightBound = clickPos + 1
+            DO WHILE rightBound <= lineLen
+              ch$ = MID$(lineStr$, rightBound, 1)
+              rType = 3
+              IF ch$ = " " OR ch$ = CHR$(9) THEN
+                rType = 1
+              ELSE
+                IF INSTR("(),=+-*/\" + CHR$(34) + ":<>';[]{}", ch$) > 0 THEN
+                  rType = 2
+                END IF
+              END IF
+              IF rType <> cType THEN EXIT DO
+              rightBound = rightBound + 1
+            LOOP
+
+            editor.SelectStartX = leftBound
+            editor.SelectStartY = newCY
+            editor.CursorX = rightBound - 1
+            editor.CursorY = newCY
+            editor.IsSelecting = 1
+          ELSE
+            editor.SelectStartX = newCX
+            editor.SelectStartY = newCY
+            editor.IsSelecting = 0
+            editor.CursorX = newCX
+            editor.CursorY = newCY
+          END IF
+        ELSE
+          editor.TextLastClickTime = TIMER
+          editor.TextClickActive = 1
+          editor.SelectStartX = newCX
+          editor.SelectStartY = newCY
+          editor.IsSelecting = 0
+          editor.CursorX = newCX
+          editor.CursorY = newCY
+        END IF
+      END IF
+    END IF
+
+    IF mouseWithinBoxBounds(0, editorBoxY, editorTextX, textH) THEN
+      editor.DragActive = 1
+      editor.Focus = 1
+      clickRelY = mouse.PosY - editorBoxY
+      newCY = (clickRelY \ 10) + editor.ScrollY
+
+      IF newCY <> editor.CursorY THEN
+        refineCode editor.CursorY, 0
+      END IF
+
+      IF newCY > lastLine THEN newCY = lastLine
+      IF newCY < 1 THEN newCY = 1
+
+      editor.CursorX = 0
+      editor.CursorY = newCY
+      editor.SelectStartX = 0
+      editor.SelectStartY = newCY
+      editor.IsSelecting = 0
+    END IF
+
+    IF mouseWithinBoxBounds(hScrollX, hScrollY, hScrollW, 8) THEN
+      editor.Focus = 1
+      IF mouseWithinBoxBounds(thumbXEd, hScrollY, thumbSizeX, 8) THEN
+        editor.ScrollDragActiveX = 1
+        editor.ScrollDragOffsetX = mouse.PosX - thumbXEd
+      ELSE
+        IF mouseWithinBoxBounds(hScrollX, hScrollY, 10, 8) THEN
+          editor.ScrollX = editor.ScrollX - 1
+          IF editor.ScrollX < 0 THEN editor.ScrollX = 0
+        ELSE
+          IF mouseWithinBoxBounds(hScrollX + hScrollW - 10, hScrollY, 10, 8) THEN
+            editor.ScrollX = editor.ScrollX + 1
+            IF editor.ScrollX > maxScrollX THEN editor.ScrollX = maxScrollX
+          ELSE
+            IF mouse.PosX < thumbXEd THEN
+              editor.ScrollX = editor.ScrollX - 10
+              IF editor.ScrollX < 0 THEN editor.ScrollX = 0
+            ELSE
+              editor.ScrollX = editor.ScrollX + 10
+              IF editor.ScrollX > maxScrollX THEN editor.ScrollX = maxScrollX
+            END IF
+          END IF
+        END IF
+      END IF
+    END IF
+  END IF
+
+  IF mouse.Button1Down AND mouse.Clicked1 = 0 THEN
+    IF editor.Focus = 1 AND editor.DragActive = 1 THEN
+      clickRelX = mouse.PosX - editorTextX
+      clickRelY = mouse.PosY - editorBoxY
+      newCX = (clickRelX \ 8) + editor.ScrollX
+      newCY = (clickRelY \ 10) + editor.ScrollY
+
+      maxScroll = lastLine - 27
+      IF maxScroll < 1 THEN maxScroll = 1
+
+      IF mouse.PosY < editorBoxY THEN
+        newCY = editor.ScrollY - 1
+        IF newCY < 1 THEN newCY = 1
+        editor.ScrollY = newCY
+      END IF
+      IF mouse.PosY >= editorBoxY + textH THEN
+        newCY = editor.ScrollY + textRows
+        editor.ScrollY = editor.ScrollY + 1
+        IF editor.ScrollY > maxScroll THEN editor.ScrollY = maxScroll
+      END IF
+
+      IF mouse.PosX < editorTextX THEN
+        newCX = editor.ScrollX - 1
+        IF newCX < 0 THEN newCX = 0
+        editor.ScrollX = newCX
+      END IF
+      IF mouse.PosX >= editorTextX + editorTextW THEN
+        newCX = editor.ScrollX + 56
+        editor.ScrollX = editor.ScrollX + 1
+        IF editor.ScrollX > maxScrollX THEN editor.ScrollX = maxScrollX
+      END IF
+
+      IF newCY < 1 THEN newCY = 1
+      IF newCY > lastLine THEN newCY = lastLine
+
+      lineLength = LEN(editorText$(newCY))
+      IF newCX > lineLength THEN newCX = lineLength
+      IF newCX < 0 THEN newCX = 0
+
+      IF newCX <> editor.CursorX OR newCY <> editor.CursorY THEN
+        editor.IsSelecting = 1
+        editor.CursorX = newCX
+        editor.CursorY = newCY
+      END IF
+    END IF
+  END IF
+
+  IF mouse.Button1Down AND editor.ScrollDragActiveX = 1 THEN
+    IF maxScrollX > 0 THEN
+      newThumbX = mouse.PosX - editor.ScrollDragOffsetX
+      trackSizeX = thumbWEd - thumbSizeX
+      IF trackSizeX > 0 THEN
+        newScrollX = ((newThumbX - (hScrollX + 10)) * maxScrollX) \ trackSizeX
+        IF newScrollX < 0 THEN newScrollX = 0
+        IF newScrollX > maxScrollX THEN newScrollX = maxScrollX
+        editor.ScrollX = newScrollX
+      END IF
+    END IF
+  END IF
+
+  IF mouse.Released1 THEN
+    editor.DragActive = 0
+    editor.ScrollDragActiveX = 0
+  END IF
+
+  IF mouse.Released2 THEN
+    IF mouseWithinBoxBounds(editorTextX, editorBoxY, editorTextW, textH) AND mouseDown2WithinBoxBounds(editorTextX, editorBoxY, editorTextW, textH) THEN
+      editor.MenuMode = 1
+    END IF
+  END IF
+
+END SUB ' drawEditorPMI
+
+''''''''''''''''''''''''
+SUB drawFuncListPMI
+
+  editorBoxTop = editor.StartY
+
+  funcListBoxX = RIGHT_BOX_X
+  funcListBoxY = editorBoxTop
+  funcListBoxW = 122
+  funcListBoxH = (13 * 10) + 4
+
+  scrollBarX = funcListBoxX + funcListBoxW - 10
+  scrollBarY = funcListBoxY
+  scrollBarW = 10
+  scrollBarH = funcListBoxH
+
+  drawBorderBox funcListBoxX, funcListBoxY, funcListBoxW, funcListBoxH, 15, 0
+
+  maxLines = 12
+
+  IF editor.MenuMode = 0 THEN
+    funcScrollY = processVScrollbar(scrollBarX, scrollBarY, scrollBarW, scrollBarH, uiSubCount, maxLines, funcScrollY, editor.FuncScrollDragActive, editor.FuncScrollDragOffsetY, 0)
+    editor.FuncScrollDragActive = returnedData2
+    editor.FuncScrollDragOffsetY = returnedData3
+
+    PrintStr funcListBoxX + 25, funcListBoxY + 4, "GO TO TOP", 15, 0, 1
+    FOR ii = 0 TO 11
+      subIdx = ii + funcScrollY
+      IF subIdx < uiSubCount THEN
+        sOutName$ = LEFT$(uiSubName$(subIdx), 13)
+
+        isCurrent = 0
+        startLine = uiSubLine(subIdx)
+        endLine = editor.LastLine
+        IF subIdx + 1 < uiSubCount THEN
+          endLine = uiSubLine(subIdx + 1) - 1
+        END IF
+
+        IF editor.CursorY >= startLine AND editor.CursorY <= endLine THEN
+          isCurrent = 1
+        END IF
+
+        IF isCurrent = 1 THEN
+          listColor = 15
+        ELSE
+          listColor = 11
+        END IF
+
+        PrintStr funcListBoxX + RIGHT_BOX_SPACING, funcListBoxY + ((ii + 1) * 10) + 4, sOutName$, listColor, 0, 1
+      END IF
+    NEXT
+  ELSE
+    PrintStr funcListBoxX + 15, funcListBoxY + 4, "CUT", 15, 0, 1
+    PrintStr funcListBoxX + 15, funcListBoxY + 14, "COPY", 15, 0, 1
+    PrintStr funcListBoxX + 15, funcListBoxY + 24, "PASTE", 15, 0, 1
+    PrintStr funcListBoxX + 15, funcListBoxY + 34, "CANCEL", 15, 0, 1
+  END IF
+
+  ' Mouse Processing Logic
+  IF mouse.Wheel <> 0 THEN
+    IF mouseWithinBoxBounds(funcListBoxX, funcListBoxY, funcListBoxW, funcListBoxH) THEN
+      funcScrollY = funcScrollY + mouse.Wheel
+      maxFuncScroll = uiSubCount - maxLines
+      IF maxFuncScroll < 0 THEN maxFuncScroll = 0
+      IF funcScrollY > maxFuncScroll THEN funcScrollY = maxFuncScroll
+      IF funcScrollY < 0 THEN funcScrollY = 0
+    END IF
+  END IF
+
+  IF mouse.Clicked1 THEN
+    IF editor.MenuMode = 1 THEN
+      IF mouseClickedInBox(funcListBoxX, funcListBoxY + 3, funcListBoxW, 10) THEN
+        rowY = funcListBoxY + 3
+        LINE (funcListBoxX + 1, rowY)-(funcListBoxX + funcListBoxW - 2, rowY + 9), 1, BF
+        PrintStr funcListBoxX + 15, rowY + 1, "CUT", 15, 0, 1
+        _DISPLAY
+        waitTimer UI_FLASH_TIME
+
+        undo_StateSave
+        lastActionWasTyping = 0
+
+        copyText$ = retEditorSelection$
+        IF copyText$ <> "" THEN _CLIPBOARD$ = copyText$
+        deleteSelection
+        editor.IsSelecting = 0
+        editor.MenuMode = 0
+      END IF
+      IF mouseClickedInBox(funcListBoxX, funcListBoxY + 13, funcListBoxW, 10) THEN
+        rowY = funcListBoxY + 13
+        LINE (funcListBoxX + 1, rowY)-(funcListBoxX + funcListBoxW - 2, rowY + 9), 1, BF
+        PrintStr funcListBoxX + 15, rowY + 1, "COPY", 15, 0, 1
+        _DISPLAY
+        waitTimer UI_FLASH_TIME
+
+        copyText$ = retEditorSelection$
+        IF copyText$ <> "" THEN _CLIPBOARD$ = copyText$
+        editor.MenuMode = 0
+      END IF
+      IF mouseClickedInBox(funcListBoxX, funcListBoxY + 23, funcListBoxW, 10) THEN
+        rowY = funcListBoxY + 23
+        LINE (funcListBoxX + 1, rowY)-(funcListBoxX + funcListBoxW - 2, rowY + 9), 1, BF
+        PrintStr funcListBoxX + 15, rowY + 1, "PASTE", 15, 0, 1
+        _DISPLAY
+        waitTimer UI_FLASH_TIME
+
+        undo_StateSave
+        lastActionWasTyping = 0
+
+        pasteClipboardText
+        editor.MenuMode = 0
+      END IF
+      IF mouseClickedInBox(funcListBoxX, funcListBoxY + 33, funcListBoxW, 10) THEN
+        rowY = funcListBoxY + 33
+        LINE (funcListBoxX + 1, rowY)-(funcListBoxX + funcListBoxW - 2, rowY + 9), 1, BF
+        PrintStr funcListBoxX + 15, rowY + 1, "CANCEL", 15, 0, 1
+        _DISPLAY
+        waitTimer UI_FLASH_TIME
+
+        editor.MenuMode = 0
+      END IF
+    END IF
+  END IF
+
+  IF mouse.Released1 THEN
+    IF editor.MenuMode = 1 THEN
+      IF mouseWithinBoxBounds(funcListBoxX, funcListBoxY, funcListBoxW, funcListBoxH) = 0 THEN
+        editor.MenuMode = 0
+      END IF
+    END IF
+
+    IF editor.MenuMode = 0 THEN
+      IF mouseClickedInBox(funcListBoxX, funcListBoxY, funcListBoxW - 10, funcListBoxH) THEN
+        clickRelY = mouse.PosY - (funcListBoxY + 3)
+        IF clickRelY < 0 THEN clickRelY = 0
+        clickedRow = clickRelY \ 10
+        IF clickedRow = 0 THEN
+          rowY = funcListBoxY + 3
+          LINE (funcListBoxX + 1, rowY)-(funcListBoxX + funcListBoxW - 11, rowY + 9), 1, BF
+          PrintStr funcListBoxX + 25, rowY + 1, "GO TO TOP", 15, 0, 1
+          _DISPLAY
+          waitTimer UI_FLASH_TIME
+
+          editor.CursorY = 1
+          editor.CursorX = 0
+          editor.ScrollY = 1
+          editor.ScrollX = 0
+          editor.SelectStartX = 0
+          editor.SelectStartY = 1
+          editor.IsSelecting = 0
+        ELSE
+          subIdx = (clickedRow - 1) + funcScrollY
+          IF subIdx < uiSubCount THEN
+            rowY = funcListBoxY + 3 + (clickedRow * 10)
+            LINE (funcListBoxX + 1, rowY)-(funcListBoxX + funcListBoxW - 11, rowY + 9), 1, BF
+            PrintStr funcListBoxX + RIGHT_BOX_SPACING, rowY + 1, LEFT$(uiSubName$(subIdx), 13), 15, 0, 1
+            _DISPLAY
+            waitTimer UI_FLASH_TIME
+
+            editor.CursorY = uiSubLine(subIdx)
+            editor.CursorX = 0
+            editor.ScrollY = editor.CursorY - 14
+            IF editor.ScrollY < 1 THEN editor.ScrollY = 1
+            editor.ScrollX = 0
+            editor.SelectStartX = 0
+            editor.SelectStartY = 1
+            editor.IsSelecting = 0
+          END IF
+        END IF
+      END IF
+    END IF
+  END IF
+
+END SUB ' drawFuncListPMI
+
+''''''''''''''''''''''''
+SUB drawStatusPMI
+
+  editorBoxTop = editor.StartY
+  editorBoxY = editorBoxTop + 3
+
+  editorTextX = EDITOR_BOX_X + LEFT_SPACING
+  editorTextW = 56 * 8
+  editorBoxH = 283
+
+  statusBoxX = 1
+  statusBoxY = editorBoxY + editorBoxH + 8
+  statusBoxW = editorTextX + editorTextW + 3
+  statusBoxH = 38
+
+  scrollBarX = statusBoxX + statusBoxW - 1
+  scrollBarY = statusBoxY
+  scrollBarW = 10
+  scrollBarH = statusBoxH
+
+  IF editor.Focus = 2 THEN
+    sFocusX = statusBoxX - 1
+    sFocusY = statusBoxY - 1
+    sFocusW = (scrollBarX + scrollBarW + 1) - sFocusX
+    sFocusH = statusBoxH + 2
+    drawClearBox sFocusX, sFocusY, sFocusW, sFocusH, sysColor.focusBorder
+  END IF
+
+  drawBorderBox statusBoxX, statusBoxY, statusBoxW, statusBoxH, 15, 0
+
+  maxLines = (statusBoxH - 8) \ 10
+  editor.StatusScrollY = processVScrollbar(scrollBarX, scrollBarY, scrollBarW, scrollBarH, (statusMsgCount - 1), maxLines, editor.StatusScrollY, editor.StatusScrollDragActive, editor.StatusScrollDragOffsetY, 1)
+  editor.StatusScrollDragActive = returnedData2
+  editor.StatusScrollDragOffsetY = returnedData3
+
+  lineY = statusBoxY + 5
+  linesDrawn = 0
+  FOR ii = editor.StatusScrollY TO statusMsgCount - 1
+    IF linesDrawn >= maxLines THEN EXIT FOR
+
+    ' Highlight selected line if the status bar is focused
+    IF ii = editor.StatusSelectedIndex AND editor.Focus = 2 THEN
+      LINE (statusBoxX + 1, lineY - 1)-(scrollBarX - 1, lineY + 8), 1, BF
+      PrintStr statusBoxX + LEFT_SPACING, lineY, statusMsg$(ii), 15, 0, 1
+    ELSE
+      PrintStr statusBoxX + LEFT_SPACING, lineY, statusMsg$(ii), 14, 0, 1
+    END IF
+
+    lineY = lineY + 10
+    linesDrawn = linesDrawn + 1
+  NEXT
+
+  ' Mouse Processing Logic
+  IF mouse.Wheel <> 0 THEN
+    IF mouseWithinBoxBounds(statusBoxX, statusBoxY, statusBoxW + scrollBarW, statusBoxH) THEN
+      editor.Focus = 2
+      editor.StatusScrollY = editor.StatusScrollY + mouse.Wheel
+      IF (statusMsgCount - 1) > maxLines THEN
+        IF editor.StatusScrollY > statusMsgCount - maxLines THEN editor.StatusScrollY = statusMsgCount - maxLines
+      ELSE
+        editor.StatusScrollY = 1
+      END IF
+      IF editor.StatusScrollY < 1 THEN editor.StatusScrollY = 1
+    END IF
+  END IF
+
+  IF mouse.Clicked1 THEN
+    IF mouseWithinBoxBounds(statusBoxX, statusBoxY, statusBoxW + scrollBarW, statusBoxH) THEN
+      editor.Focus = 2
+    END IF
+  END IF
+
+  IF mouse.Released1 THEN
+    IF mouseClickedInBox(statusBoxX, statusBoxY, statusBoxW, statusBoxH) THEN
+      clickRelY = mouse.PosY - (statusBoxY + 5)
+      clickedRow = clickRelY \ 10
+      IF clickedRow >= 0 AND clickedRow < maxLines THEN
+        msgIdx = editor.StatusScrollY + clickedRow
+        IF msgIdx < statusMsgCount THEN
+          editor.StatusSelectedIndex = msgIdx
+          clickedMsg$ = statusMsg$(msgIdx)
+
+          IF LEFT$(clickedMsg$, 11) = "ERROR line " OR LEFT$(clickedMsg$, 13) = "WARNING line " THEN
+            IF LEFT$(clickedMsg$, 11) = "ERROR line " THEN
+              colonPos = INSTR(clickedMsg$, ":")
+              startPos = 12
+            ELSE
+              colonPos = INSTR(clickedMsg$, ":")
+              startPos = 14
+            END IF
+
+            IF colonPos > startPos - 1 THEN
+              lineStr$ = MID$(clickedMsg$, startPos, colonPos - startPos)
+              errLine = VAL(lineStr$)
+              IF errLine > 0 THEN
+                editor.CursorY = errLine
+                editor.CursorX = 0
+                editor.ScrollY = errLine - 14
+                IF editor.ScrollY < 1 THEN editor.ScrollY = 1
+                editor.ScrollX = 0
+                editor.SelectStartX = 0
+                editor.SelectStartY = errLine
+                editor.IsSelecting = 0
+                editor.Focus = 1
+              END IF
+            END IF
+          END IF
+        ELSE
+          editor.StatusSelectedIndex = 0
+        END IF
+      ELSE
+        editor.StatusSelectedIndex = 0
+      END IF
+    END IF
+  END IF
+
+END SUB ' drawStatusPMI
+
+''''''''''''''''''''''''
+SUB drawTopMenuAndScrollPMI
+
+  editorBoxTop = editor.StartY
+  editorBoxY = editorBoxTop + 3
+
+  editorTextX = EDITOR_BOX_X + LEFT_SPACING
+  editorTextW = 56 * 8
+
+  textRows = 28
+  textH = textRows * 10
+  editorBoxH = textH + 3
+
+  editorScrollBarX = editorTextX + editorTextW + 3
+  editorScrollBarY = editorBoxTop
+  editorScrollBarW = 10
+  editorScrollBarH = textH + 4
+
+  hScrollY = editorBoxY + textH
+
+  ' Draw Top Menu Background
+  LINE (0, 0)-(SCREENSIZEX - 1, 12), editor.windowBarClr, BF
+
+  DIM fileMenu$(3)
+  fileMenu$(0) = "OPEN"
+  fileMenu$(1) = "SAVE AS"
+  fileMenu$(2) = "NEW"
+  fileMenu$(3) = "IMPORT"
+
+  IF editor.TopMenuFocus = 1 THEN
+    drawClearBox 4, 1, 34, 11, 9
+    PrintStr 6, 3, "FILE", 15, 0, 1
+
+    ff = processDropdownMenu(4, 12, 4, fileMenu$())
+    IF ff = 1 THEN
+      clickedIdx = returnedData2
+    END IF
+
+    fnBoxX = 75
+    fnBoxY = 12
+    fnBoxW = 17 + (LEN(fileNameCode$) * 8)
+    fnBoxH = 16
+
+    LINE (fnBoxX, fnBoxY + 1)-(fnBoxX + fnBoxW - 2, fnBoxY + fnBoxH - 2), editor.windowBarClr, BF
+    LINE (fnBoxX, fnBoxY)-(fnBoxX + fnBoxW - 1, fnBoxY), 15
+    LINE (fnBoxX + fnBoxW - 1, fnBoxY)-(fnBoxX + fnBoxW - 1, fnBoxY + fnBoxH - 1), 15
+    LINE (fnBoxX, fnBoxY + fnBoxH - 1)-(fnBoxX + fnBoxW - 1, fnBoxY + fnBoxH - 1), 15
+
+    PrintStr 84, 15, fileNameCode$, 11, 0, 1
+
+    IF ff = 1 THEN
+      IF clickedIdx = 0 THEN
+        editor.TopMenuFocus = 0
+        fileMenuOpenModal
+      END IF
+      IF clickedIdx = 1 THEN
+        editor.TopMenuFocus = 0
+        fileMenuSaveModal
+      END IF
+      IF clickedIdx = 2 THEN
+        editor.TopMenuFocus = 0
+        fileMenuNewModal
+      END IF
+      IF clickedIdx = 3 THEN
+        editor.TopMenuFocus = 0
+        fileMenuImportModal
+      END IF
+    END IF
+  ELSE
+    PrintStr 6, 3, "FILE", 15, 0, 1
+  END IF
+
+  DIM editMenu$(0)
+  IF undoState.Ready = 1 THEN
+    editMenu$(0) = "UNDO"
+  ELSE
+    editMenu$(0) = "~UNDO"
+  END IF
+
+  IF editor.TopMenuFocus = 2 THEN
+    drawClearBox 44, 1, 34, 11, 9
+    PrintStr 46, 3, "EDIT", 15, 0, 1
+
+    ff = processDropdownMenu(44, 12, 1, editMenu$())
+    IF ff = 1 THEN
+      clickedIdx = returnedData2
+      IF clickedIdx = 0 THEN
+        editor.TopMenuFocus = 0
+        undo_StateRestore
+      END IF
+    END IF
+  ELSE
+    PrintStr 46, 3, "EDIT", 15, 0, 1
+  END IF
+
+  DIM viewMenu$(0)
+  viewMenu$(0) = "VIEW SUBS"
+
+  IF editor.TopMenuFocus = 3 THEN
+    drawClearBox 84, 1, 34, 11, 9
+    PrintStr 86, 3, "VIEW", 15, 0, 1
+
+    ff = processDropdownMenu(84, 12, 1, viewMenu$())
+    IF ff = 1 THEN
+      clickedIdx = returnedData2
+      IF clickedIdx = 0 THEN
+        editor.TopMenuFocus = 0
+        viewSubsModal
+      END IF
+    END IF
+  ELSE
+    PrintStr 86, 3, "VIEW", 15, 0, 1
+  END IF
+
+  lastLine = editor.LastLine
+  IF editor.CursorY > lastLine THEN lastLine = editor.CursorY
+
+  editor.ScrollY = processVScrollbar(editorScrollBarX, editorScrollBarY, editorScrollBarW, editorScrollBarH, lastLine, textRows, editor.ScrollY, editor.ScrollDragActive, editor.ScrollDragOffsetY, 1)
+  editor.ScrollDragActive = returnedData2
+  editor.ScrollDragOffsetY = returnedData3
+
+  ' Draw Corner Box
+  drawBorderBox editorScrollBarX, hScrollY, editorScrollBarW, 8, 15, 0
+
+  ' Mouse Processing Logic
+  IF mouse.Clicked1 THEN
+    IF mouseWithinBoxBounds(editorScrollBarX, editorScrollBarY, editorScrollBarW, editorScrollBarH) THEN
+      editor.Focus = 1
+    END IF
+
+    IF mouseWithinBoxBounds(editorScrollBarX, hScrollY, editorScrollBarW, 8) THEN
+      editor.Focus = 1
+      IF editor.CornerClickActive = 1 AND (TIMER - editor.CornerLastClickTime) < 0.25 THEN
+        ' Double-click detected
+        lastLine = editor.LastLine
+        IF editor.CursorY > lastLine THEN lastLine = editor.CursorY
+
+        maxScroll = lastLine - 27
+        IF maxScroll < 1 THEN maxScroll = 1
+
+        editor.ScrollY = maxScroll
+        editor.CursorY = lastLine
+        editor.CursorX = 0
+        editor.CornerClickActive = 0 ' Reset for next double-click
+      ELSE
+        ' Single-click, set timer
+        editor.CornerLastClickTime = TIMER
+        editor.CornerClickActive = 1
+      END IF
+    END IF
+  END IF
+
+  IF mouse.Released1 THEN
+    IF mouseClickedInBox(4, 1, 32, 10) THEN
+      IF editor.TopMenuFocus = 1 THEN
+        editor.TopMenuFocus = 0
+      ELSE
+        editor.TopMenuFocus = 1
+        editor.Focus = 0
+      END IF
+      editor.MenuClicked = 1
+    END IF
+
+    IF mouseClickedInBox(44, 1, 32, 10) THEN
+      IF editor.TopMenuFocus = 2 THEN
+        editor.TopMenuFocus = 0
+      ELSE
+        editor.TopMenuFocus = 2
+        editor.Focus = 0
+      END IF
+      editor.MenuClicked = 1
+    END IF
+
+    IF mouseClickedInBox(84, 1, 32, 10) THEN
+      IF editor.TopMenuFocus = 3 THEN
+        editor.TopMenuFocus = 0
+      ELSE
+        editor.TopMenuFocus = 3
+        editor.Focus = 0
+      END IF
+      editor.MenuClicked = 1
+    END IF
+  END IF
+
+END SUB ' drawTopMenuAndScrollPMI
+
+''''''''''''''''''''''''
+'' SUB emitByteCode (wByte AS _UNSIGNED _BYTE) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitBytes32 (wVal AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitEpilogue ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitMemoryOperand (regField AS LONG, baseReg AS LONG, dispType AS LONG, dispVal AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitPrologue ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitPrologueWindowSetup ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitRuntimeAll ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitRuntimeAutodisplayCheck ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitRuntimeCircle ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitRuntimeCrlf ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitRuntimeFullscreen ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitRuntimeGfxAppend ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitRuntimeGfxGet ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitRuntimeGfxPut ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitRuntimeInput ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitRuntimeKeyDown ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitRuntimeLine ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitRuntimeMouseInput ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitRuntimePaint ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitRuntimePlotPixel ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitRuntimePrintInt ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitRuntimePrintFloat ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitRuntimePrintStr ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitRuntimeRead ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitRuntimeStrAssign ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitRuntimeStrCmp ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitRuntimeSwapBuffers ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB emitRuntimeVehHandler ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION evalMathConst$ (wExpr$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION extractQuotes$ (wStr$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB fileBitmapLoad ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB fileCodeLoad ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB fileCodeSave ' This is in the main file
+
+''''''''''''''''''''''''
+SUB fileMenuNewModal
+
+  _KEYCLEAR
+
+  DO
+    limitSpeed
+    mouseReadInput
+
+    redrawAll
+
+    boxW = 320
+    boxH = 80
+    boxX = (SCREENSIZEX - boxW) \ 2
+    boxY = (SCREENSIZEY - boxH) \ 2
+
+    drawBorderBox boxX, boxY, boxW, boxH, 15, editor.windowBarClr
+    PrintStr boxX + (boxW \ 2) - 32, boxY + 3, "NEW FILE", 14, 0, 1
+    LINE (boxX, boxY + 13)-(boxX + boxW - 1, boxY + 13), 15
+
+    closeBtnW = 15
+    closeBtnH = 13
+    closeBtnX = boxX + boxW - closeBtnW
+    closeBtnY = boxY
+    drawBorderBox closeBtnX, closeBtnY, closeBtnW, closeBtnH, 15, editor.CloseClr
+    PrintStr closeBtnX + 4, closeBtnY + 3, "X", 15, 0, 1
+
+    IF mouseClickedInBox(closeBtnX, closeBtnY, closeBtnW, closeBtnH) THEN
+      EXIT DO
+    END IF
+
+    PrintStr boxX + (boxW \ 2) - 132, boxY + 24, "ALL UNSAVED PROGRESS WILL BE LOST", 15, 0, 1
+
+    btnYesW = 64
+    btnYesH = 20
+    btnYesX = boxX + (boxW \ 2) - btnYesW - 16
+    btnYesY = boxY + 46
+
+    btnNoW = 64
+    btnNoH = 20
+    btnNoX = boxX + (boxW \ 2) + 16
+    btnNoY = boxY + 46
+
+    drawBorderBox btnYesX, btnYesY, btnYesW, btnYesH, 15, 0
+    PrintStr btnYesX + 20, btnYesY + 6, "YES", 15, 0, 1
+
+    drawBorderBox btnNoX, btnNoY, btnNoW, btnNoH, 15, 0
+    PrintStr btnNoX + 24, btnNoY + 6, "NO", 15, 0, 1
+
+    _DISPLAY
+
+    doNewFile = 0
+
+    kVal = _KEYHIT
+    IF kVal <> 0 THEN
+      IF kVal = 27 THEN ' ESC
+        waitKeyRelease "ESC"
+        EXIT DO
+      END IF
+
+      IF kVal = 13 THEN ' ENTER
+        doNewFile = 1
+      END IF
+    END IF
+
+    IF mouseClickedInBox(btnYesX, btnYesY, btnYesW, btnYesH) THEN
+      doNewFile = 1
+    END IF
+
+    IF mouseClickedInBox(btnNoX, btnNoY, btnNoW, btnNoH) THEN
+      EXIT DO
+    END IF
+
+    IF doNewFile = 1 THEN
+      FOR ii = 1 TO EDITOR_LINE_MAX
+        editorText$(ii) = ""
+      NEXT
+      editor.LastLine = 1
+      editor.CursorX = 0
+      editor.CursorY = 1
+      editor.ScrollX = 0
+      editor.ScrollY = 1
+      editor.SelectStartX = 0
+      editor.SelectStartY = 1
+      editor.IsSelecting = 0
+      undoState.Ready = 0
+      lastActionWasTyping = 0
+      fileNameCode$ = "code.txt"
+      refineCode 0, 0
+      addStatusMsg "NEW FILE CREATED"
+      EXIT DO
+    END IF
+
+  LOOP
+
+END SUB ' fileMenuNewModal
+
+''''''''''''''''''''''''
+SUB fileMenuOpenModal
+
+  DIM fileList$(1000)
+  DIM fileCount AS LONG
+  DIM localScrollY AS LONG
+  DIM localDragActive AS LONG
+  DIM localDragOffset AS LONG
+
+  ' Get directory listing safely
+  SHELL _HIDE "cmd /c dir /b /a-d *.bas *.blb > flist.tmp 2>nul"
+
+  fileCount = 0
+  IF _FILEEXISTS("flist.tmp") THEN
+    ffTmp = FREEFILE
+    OPEN "flist.tmp" FOR INPUT AS #ffTmp
+    DO WHILE NOT EOF(ffTmp) AND fileCount < 1000
+      LINE INPUT #ffTmp, fileLine$
+      fileLine$ = LTRIM$(RTRIM$(fileLine$))
+      IF fileLine$ <> "" AND UCASE$(fileLine$) <> "FLIST.TMP" THEN
+        fileList$(fileCount) = fileLine$
+        fileCount = fileCount + 1
+      END IF
+    LOOP
+    CLOSE #ffTmp
+    KILL "flist.tmp"
+  END IF
+
+  IF fileCount = 0 THEN
+    addStatusMsg "NO BAS OR BLB FILES FOUND"
+    EXIT SUB
+  END IF
+
+  localScrollY = 0
+  localDragActive = 0
+  localDragOffset = 0
+
+  ' Ensure clean key state
+  _KEYCLEAR
+
+  DO
+    limitSpeed
+    mouseReadInput
+
+    redrawAll
+
+    boxW = 200
+    boxH = 240
+    boxX = (SCREENSIZEX - boxW) \ 2
+    boxY = (SCREENSIZEY - boxH) \ 2
+
+    drawBorderBox boxX, boxY, boxW, boxH, 15, editor.windowBarClr
+
+    closeBtnW = 15
+    closeBtnH = 13
+    closeBtnX = boxX + boxW - closeBtnW
+    closeBtnY = boxY
+    drawBorderBox closeBtnX, closeBtnY, closeBtnW, closeBtnH, 15, editor.CloseClr
+    PrintStr closeBtnX + 4, closeBtnY + 3, "X", 15, 0, 1
+
+    IF mouseClickedInBox(closeBtnX, closeBtnY, closeBtnW, closeBtnH) THEN
+      EXIT DO
+    END IF
+
+    PrintStr boxX + (boxW \ 2) - (9 * 4), boxY + 3, "OPEN FILE", 14, 0, 1
+    LINE (boxX, boxY + 13)-(boxX + boxW - 1, boxY + 13), 15
+
+    itemH = 10
+    maxLines = (boxH - 15) \ itemH
+
+    ' Scrollbar
+    scrollBarX = boxX + boxW - 12
+    scrollBarY = boxY + 14
+    scrollBarW = 12
+    scrollBarH = boxH - 15
+
+    localScrollY = processVScrollbar(scrollBarX, scrollBarY, scrollBarW, scrollBarH, fileCount, maxLines, localScrollY, localDragActive, localDragOffset, 0)
+    localDragActive = returnedData2
+    localDragOffset = returnedData3
+
+    ' Mouse wheel
+    IF mouse.Wheel <> 0 THEN
+      IF mouseWithinBoxBounds(boxX, boxY, boxW, boxH) THEN
+        localScrollY = localScrollY + mouse.Wheel
+        maxScroll = fileCount - maxLines
+        IF maxScroll < 0 THEN maxScroll = 0
+        IF localScrollY > maxScroll THEN localScrollY = maxScroll
+        IF localScrollY < 0 THEN localScrollY = 0
+      END IF
+    END IF
+
+    ' Draw items
+    FOR ii = 0 TO maxLines - 1
+      fIdx = ii + localScrollY
+      IF fIdx < fileCount THEN
+        itemY = boxY + 14 + (ii * itemH)
+        sOutName$ = fileList$(fIdx)
+        IF LEN(sOutName$) > 20 THEN sOutName$ = LEFT$(sOutName$, 20)
+
+        ' Hover
+        IF mouseWithinBoxBounds(boxX + 2, itemY, boxW - 16, itemH) THEN
+          drawClearBox boxX + 2, itemY, boxW - 16, itemH, 9
+
+          IF mouseClickedInBox(boxX + 2, itemY, boxW - 16, itemH) THEN
+            LINE (boxX + 2, itemY)-(boxX + boxW - 15, itemY + itemH - 1), 1, BF
+            PrintStr boxX + 8, itemY + 1, sOutName$, 15, 0, 1
+
+            _DISPLAY
+            waitTimer UI_FLASH_TIME
+
+            fileNameCode$ = fileList$(fIdx)
+            fileCodeLoad
+            refineCode 0, 0
+
+            editor.CursorY = 1
+            editor.CursorX = 0
+            editor.ScrollY = 1
+            editor.ScrollX = 0
+            editor.SelectStartX = 0
+            editor.SelectStartY = 1
+            editor.IsSelecting = 0
+            editor.Focus = 1
+
+            addStatusMsg "LOADED " + fileNameCode$
+
+            EXIT DO
+          END IF
+        END IF
+
+        PrintStr boxX + 8, itemY + 1, sOutName$, 11, 0, 1
+      END IF
+    NEXT
+
+    _DISPLAY
+
+    kVal = keyCheck("ESC")
+    IF kVal = 27 THEN
+      waitKeyRelease "ESC"
+      EXIT DO
+    END IF
+
+  LOOP
+
+END SUB ' fileMenuOpenModal
+
+''''''''''''''''''''''''
+SUB fileMenuSaveModal
+
+  saveAsName$ = fileNameCode$
+
+  _KEYCLEAR
+
+  DO
+    limitSpeed
+    mouseReadInput
+
+    redrawAll
+
+    boxW = 320
+    boxH = 64
+    boxX = (SCREENSIZEX - boxW) \ 2
+    boxY = (SCREENSIZEY - boxH) \ 2
+
+    drawBorderBox boxX, boxY, boxW, boxH, 15, editor.windowBarClr
+    PrintStr boxX + (boxW \ 2) - 28, boxY + 3, "SAVE AS", 14, 0, 1
+    LINE (boxX, boxY + 13)-(boxX + boxW - 1, boxY + 13), 15
+
+    closeBtnW = 15
+    closeBtnH = 13
+    closeBtnX = boxX + boxW - closeBtnW
+    closeBtnY = boxY
+    drawBorderBox closeBtnX, closeBtnY, closeBtnW, closeBtnH, 15, editor.CloseClr
+    PrintStr closeBtnX + 4, closeBtnY + 3, "X", 15, 0, 1
+
+    IF mouseClickedInBox(closeBtnX, closeBtnY, closeBtnW, closeBtnH) THEN
+      EXIT DO
+    END IF
+
+    ' Input box
+    inputBoxX = boxX + 16
+    inputBoxY = boxY + 24
+    inputBoxW = boxW - 32
+    inputBoxH = 16
+    drawBorderBox inputBoxX, inputBoxY, inputBoxW, inputBoxH, 15, 0
+
+    ' Draw text
+    PrintStr inputBoxX + 4, inputBoxY + 4, saveAsName$ + "_", 15, 0, 1
+
+    _DISPLAY
+
+    kVal = _KEYHIT
+    IF kVal <> 0 THEN
+      IF kVal = 27 THEN ' ESC
+        waitKeyRelease "ESC"
+        EXIT DO
+      END IF
+
+      IF kVal = 13 THEN ' ENTER
+        IF saveAsName$ <> "" THEN
+          fileNameCode$ = saveAsName$
+          fileCodeSave
+          addStatusMsg "SAVED AS " + fileNameCode$
+        END IF
+        EXIT DO
+      END IF
+
+      IF kVal = 8 THEN ' Backspace
+        qLen = LEN(saveAsName$)
+        IF qLen > 0 THEN
+          saveAsName$ = LEFT$(saveAsName$, qLen - 1)
+        END IF
+      ELSE
+        IF kVal >= 32 AND kVal <= 126 THEN
+          IF LEN(saveAsName$) < 34 THEN
+            saveAsName$ = saveAsName$ + CHR$(kVal)
+          END IF
+        END IF
+      END IF
+    END IF
+
+  LOOP
+
+END SUB ' fileMenuSaveModal
+
+''''''''''''''''''''''''
+'' SUB fileOutputErrorReport (wStr1$, wStr2$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB fileSaveBinary ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION findComma (startIdx, endIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB findEditorNext ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION findMatchingParen (startIdx, endIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION findNextTokenAtDepth0 (startIdx, endIdx, passTokVal) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION findSubIndex (passName$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION findSubIndexByScope (passScopeID AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION findSymbol (vName$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION findUdtIndex (passName$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION flattenRebuildStr$ (startIdx, endIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION genAlignedCall (iatConst, backupReg, stackArgBytes AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB genBlockTransfer (srcReg, destReg, lenReg) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION genLoadStringDesc (descReg, dataReg, lenReg) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION genSymbolRouteLea (destReg AS LONG, vIdx AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION genSymbolRouteMov (destType AS LONG, destInfo AS LONG, srcType AS LONG, srcInfo AS _INTEGER64, opSize AS LONG, vIdx AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION genSymbolRouteSSE (sseOpCode AS LONG, destType AS LONG, destInfo AS LONG, srcType AS LONG, srcInfo AS LONG, opMode AS LONG, vIdx AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION hashString (wStr$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION hexLen$ (wVal, wLen) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB hoistIntrinsics ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB initColors ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB initFileNames ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB initIntrinsics ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB initKeyMapping ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB initKeywords ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB initLayout ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB initPalettesBmp ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB initPalettesOutput ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB initStackLayout ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB initSymbolHash ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB initTypeDatabase ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION keyCheck (wStr$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB limitSpeed ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION mouseClickedInBox (wStartX, wStartY, wSizeX, wSizeY) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION mouseDownWithinBoxBounds (wStartX, wStartY, wSizeX, wSizeY) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION mouseDown2WithinBoxBounds (wStartX, wStartY, wSizeX, wSizeY) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB mouseReadInput ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION mouseWithinBoxBounds (wStartX, wStartY, wSizeX, wSizeY) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB op_SafetyCheck (wStr$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB opAddRsp32 (wVal AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION opALU (aluOpCode, destType, destInfo, srcType, srcInfo, opSizeOrFlag) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION opALU_SIB (aluOpCode, destIsMem AS LONG, valType AS LONG, valInfo AS _INTEGER64, baseReg AS LONG, indexReg AS LONG, scaleVal AS LONG, dispVal AS LONG, opSize AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION opCall (wInfo, wMode) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB opDecReg (wReg, opSize) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB opExtend (wExtendType) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB opFlag (wFlagType) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB opHelperEmitSIBoperand (regField AS LONG, baseReg AS LONG, indexReg AS LONG, scaleVal AS LONG, dispVal AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION opImul (destReg AS LONG, srcType AS LONG, srcInfo AS _INTEGER64, immVal AS _INTEGER64, opMode AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB opIncReg (wReg, opSize) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION opJcc (condCode, wMode, wTarget, wJumpType) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION opLea (destType, destReg AS LONG, srcType, srcInfo AS _INTEGER64, opSizeOrFlag) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION opLea_SIB (destReg AS LONG, baseReg AS LONG, indexReg AS LONG, scaleVal AS LONG, dispVal AS LONG, opSize AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION opMov (destType, destInfo AS LONG, srcType, srcInfo AS _INTEGER64, opSizeOrFlag) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION opMov_SIB (destIsMem AS LONG, valType AS LONG, valInfo AS _INTEGER64, baseReg AS LONG, indexReg AS LONG, scaleVal AS LONG, dispVal AS LONG, opSize AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB opPopReg (wReg) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB opPushReg (wReg) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB opRet ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION opSetcc (passCondCode, passDestReg) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB opShift (wShiftType, wReg, wAmount, opSize) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION opSSE (sseOpCode AS LONG, destType AS LONG, destInfo AS LONG, srcType AS LONG, srcInfo AS LONG, opMode AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB opString (wStrOp, wPrefix, wSize) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB opSubRsp32 (wVal AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION opTest (destType, destInfo AS LONG, srcType, srcInfo AS _INTEGER64, opSizeOrFlag) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION opUnary (passOpCode, passDestType, passDestInfo, passOpSize) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_ABS$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_ASC$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_ATN$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_BEEP (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_BLUE32$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_CASE (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_CHR$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_CIRCLE (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_CLOSE (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_CLS (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_COLOR (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_COMMON (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_COS$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_DEFINT (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_DIM (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_DISPLAY (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_DISPLAYI (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_DISPLAY_Core (startIdx, isDisplayI) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_DO (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_END (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_EXIT (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_FOR (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_FULLSCREEN (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_GET (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_GET_File (startIdx, endIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_GLOBAL (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_GLOBAL_Core (startTokIdx, endIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_GOSUB (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_GOTO (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_GREEN32$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_HEX$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_IF (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_INKEY$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_INKEYF$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_INPUT (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_INSTR$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_INT$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_KEYDOWN$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_KILL (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_LBOUND$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_LEFT$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_LEN$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_LINE (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_LINE_INPUT (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_LOCATE (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_LOF$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_LOOP (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_LTRIM$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_MEM$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_MEMERROR (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_MEMFILL (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_MID$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_MOUSEBUTTON$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_MOUSEINPUT$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_MOUSEWHEEL$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_MOUSEX$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_MOUSEY$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_NEXT (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_ON (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_OPEN (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_PAINT (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_PALETTE (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_PALETTECOLOR (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_PALETTECOLOR_FUNC$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_PEEK$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_POINT$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_POKE (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_PRINT (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_PSET (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_PUT (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_PUT_File (startIdx, endIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_RANDOMIZE (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_READ (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_REDIM (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_RED32$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_RESTORE (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_RESUME (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_RETURN (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_RGB$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_RGB32$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_RIGHT$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_RND$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_RTRIM$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_SELECT (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_SGN$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_SIN$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_SPACE$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_STOP (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_STR$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_TIMER$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_UBOUND$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_UCASE$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_VAL$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_VIEW (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_VIEW_GRAPHICS (startIdx, endIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_VIEW_PRINT (startIdx, endIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_WEND (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parse_WHILE (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parseAssign (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parseAssignRouter (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parseIntrinsic$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parseStatement (startIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parseSubCall (startIdx, isExplicit, passVIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION parseTypeClause (startTokIdx, endIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+SUB pasteClipboardText
+
+  IF editor.IsSelecting = 1 THEN
+    deleteSelection
+    editor.IsSelecting = 0
+  END IF
+
+  cbText$ = _CLIPBOARD$
+  cbLen = LEN(cbText$)
+  IF cbLen = 0 THEN EXIT SUB
+
+  ' Pre-allocate a buffer to rapidly filter non-printable characters in a single O(N) pass
+  cleanText$ = SPACE$(cbLen)
+  cleanIdx = 1
+
+  FOR ii = 1 TO cbLen
+    cbAsc = ASC(cbText$, ii)
+    ' Allow only newlines (10) and standard printable characters (32 to 126)
+    IF cbAsc = 10 OR (cbAsc >= 32 AND cbAsc <= 126) THEN
+      ASC(cleanText$, cleanIdx) = cbAsc
+      cleanIdx = cleanIdx + 1
+    END IF
+  NEXT
+
+  cbText$ = LEFT$(cleanText$, cleanIdx - 1)
+  cbLen = LEN(cbText$)
+  IF cbLen = 0 THEN EXIT SUB
+
+  ' Count newlines to determine the exact array shift distance
+  nlCount = 0
+  ix = 1
+  DO WHILE ix <= cbLen
+    nextNl = INSTR(ix, cbText$, CHR$(10))
+    IF nextNl > 0 THEN
+      nlCount = nlCount + 1
+      ix = nextNl + 1
+    ELSE
+      EXIT DO
+    END IF
+  LOOP
+
+  ' Shift array down exactly once in bulk
+  IF nlCount > 0 THEN
+    FOR iy = editor.LastLine TO editor.CursorY + 1 STEP -1
+      IF iy + nlCount <= EDITOR_LINE_MAX THEN
+        editorText$(iy + nlCount) = editorText$(iy)
+      END IF
+    NEXT
+
+    editor.LastLine = editor.LastLine + nlCount
+    IF editor.LastLine > EDITOR_LINE_MAX THEN editor.LastLine = EDITOR_LINE_MAX
+  END IF
+
+  currentLine$ = editorText$(editor.CursorY)
+  leftPart$ = LEFT$(currentLine$, editor.CursorX)
+  rightPart$ = MID$(currentLine$, editor.CursorX + 1)
+
+  ix = 1
+  curPasteY = editor.CursorY
+  linesPasted = 0
+
+  ' Process the filtered clipboard and inject directly into the opened array spaces
+  DO WHILE ix <= cbLen
+    nextNl = INSTR(ix, cbText$, CHR$(10))
+    IF nextNl = 0 THEN
+      ' Final chunk of text (no trailing newline)
+      chunk$ = MID$(cbText$, ix)
+      IF curPasteY <= EDITOR_LINE_MAX THEN
+        IF linesPasted = 0 THEN
+          editorText$(curPasteY) = leftPart$ + chunk$ + rightPart$
+          editor.CursorX = LEN(leftPart$ + chunk$)
+        ELSE
+          editorText$(curPasteY) = chunk$ + rightPart$
+          editor.CursorX = LEN(chunk$)
+        END IF
+      END IF
+      EXIT DO
+    ELSE
+      ' Extract line up to the newline
+      chunk$ = MID$(cbText$, ix, nextNl - ix)
+      IF curPasteY <= EDITOR_LINE_MAX THEN
+        IF linesPasted = 0 THEN
+          editorText$(curPasteY) = leftPart$ + chunk$
+        ELSE
+          editorText$(curPasteY) = chunk$
+        END IF
+      END IF
+
+      linesPasted = linesPasted + 1
+      curPasteY = curPasteY + 1
+      ix = nextNl + 1
+    END IF
+  LOOP
+
+  ' Handle edge case where clipboard ends exactly on a newline
+  IF RIGHT$(cbText$, 1) = CHR$(10) THEN
+    IF curPasteY <= EDITOR_LINE_MAX THEN
+      editorText$(curPasteY) = rightPart$
+      editor.CursorX = 0
+    END IF
+  END IF
+
+  editor.CursorY = curPasteY
+  IF editor.CursorY > EDITOR_LINE_MAX THEN
+    editor.CursorY = EDITOR_LINE_MAX
+    editor.CursorX = LEN(editorText$(EDITOR_LINE_MAX))
+  END IF
+
+  ' Update view scrolling
+  IF editor.CursorY < editor.ScrollY THEN editor.ScrollY = editor.CursorY
+  IF editor.CursorY >= editor.ScrollY + 28 THEN editor.ScrollY = editor.CursorY - 27
+  IF editor.CursorX < editor.ScrollX THEN editor.ScrollX = editor.CursorX
+  IF editor.CursorX >= editor.ScrollX + 56 THEN editor.ScrollX = editor.CursorX - 55
+
+END SUB ' pasteClipboardText
+
+''''''''''''''''''''''''
+'' SUB patch8 (wPos) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB patch32 (wPos, wVal AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB prepareBinary ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB PrintChr (wPosPixelsX, wPosPixelsY, wStr$, fgClr, bgClr, useTransparent) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB PrintStr (wPosPixelsX, wPosPixelsY, wStr$, fgClr, bgClr, useTransparent) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB PrintTextLineWithBanners (text$, wClr, whereY) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB processCompileState ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION processDropdownMenu (wPosX, wPosY, wItemCount, passItems$()) ' This is in the main file
+
+
+''''''''''''''''''''''''
+SUB processInput
+
+  IF keyCheck("ESC") THEN
+    IF editor.MenuMode = 1 THEN
+      editor.MenuMode = 0
+      waitKeyRelease "ESC"
+    ELSE
+      IF _KEYDOWN(100303) OR _KEYDOWN(100304) THEN
+        waitKeyRelease "ESC"
+        confirmExit
+      END IF
+    END IF
+  END IF
+
+  IF keyCheck("F5") THEN
+    waitKeyRelease "F5"
+    IF compileState = COMP_IDLE THEN
+      statusMsgCount = 1
+      editor.StatusScrollY = 1
+      editor.StatusSelectedIndex = 0
+      FOR ii = 1 TO 999
+        statusMsg$(ii) = ""
+      NEXT
+      compileState = COMP_REFINE
+      addStatusMsg "REFINING..."
+
+      ' Force an immediate UI redraw to show the refining status and gray out the button
+      ' before processCompileState blocks the execution thread
+      redrawAll
+      _DISPLAY
+    END IF
+  END IF
+
+  IF (_KEYDOWN(100306) OR _KEYDOWN(100305)) AND keyCheck("F") THEN
+    waitKeyRelease "F"
+    searchModal
+  END IF
+
+  IF keyCheck("F3") THEN
+    waitKeyRelease "F3"
+    IF editorSearchQuery$ <> "" THEN
+      findEditorNext
+    ELSE
+      searchModal
+    END IF
+  END IF
+
+  kVal = _KEYHIT
+  IF kVal = 0 THEN EXIT SUB
+
+  IF editor.Focus = 2 THEN
+    ' Ctrl+C (Copy)
+    IF kVal = 3 OR ((kVal = 99 OR kVal = 67) AND (_KEYDOWN(100306) OR _KEYDOWN(100305))) THEN
+      IF editor.StatusSelectedIndex <> 0 THEN
+        _CLIPBOARD$ = statusMsg$(editor.StatusSelectedIndex)
+      END IF
+      kVal = 0
+    END IF
+
+    ' Ctrl+X (Cut) - Treat as copy for status bar
+    IF kVal = 24 OR ((kVal = 120 OR kVal = 88) AND (_KEYDOWN(100306) OR _KEYDOWN(100305))) THEN
+      IF editor.StatusSelectedIndex <> 0 THEN
+        _CLIPBOARD$ = statusMsg$(editor.StatusSelectedIndex)
+      END IF
+      kVal = 0
+    END IF
+  END IF
+
+  IF editor.Focus = 1 THEN
+
+    lastLine = editor.LastLine
+    IF editor.CursorY > lastLine THEN lastLine = editor.CursorY
+
+    oldCursorY = editor.CursorY
+
+    ' Ctrl+Z (Undo)
+    IF kVal = 26 OR ((kVal = 122 OR kVal = 90) AND (_KEYDOWN(100306) OR _KEYDOWN(100305))) THEN
+      undo_StateRestore
+      kVal = 0
+      lastActionWasTyping = 0
+    END IF
+
+    ' Ctrl+C (Copy)
+    IF kVal = 3 OR ((kVal = 99 OR kVal = 67) AND (_KEYDOWN(100306) OR _KEYDOWN(100305))) THEN
+      IF editor.IsSelecting = 1 THEN
+        copyText$ = retEditorSelection$
+        IF copyText$ <> "" THEN _CLIPBOARD$ = copyText$
+      END IF
+      kVal = 0
+    END IF
+
+    ' Ctrl+X (Cut)
+    IF kVal = 24 OR ((kVal = 120 OR kVal = 88) AND (_KEYDOWN(100306) OR _KEYDOWN(100305))) THEN
+      IF editor.IsSelecting = 1 THEN
+        undo_StateSave
+        lastActionWasTyping = 0
+        copyText$ = retEditorSelection$
+        IF copyText$ <> "" THEN _CLIPBOARD$ = copyText$
+        deleteSelection
+        editor.IsSelecting = 0
+      END IF
+      kVal = 0
+    END IF
+
+    ' Ctrl+A (Select All)
+    IF kVal = 1 OR ((kVal = 97 OR kVal = 65) AND (_KEYDOWN(100306) OR _KEYDOWN(100305))) THEN
+      editor.SelectStartX = 0
+      editor.SelectStartY = 1
+      editor.CursorY = editor.LastLine
+      editor.CursorX = LEN(editorText$(editor.LastLine))
+      editor.IsSelecting = 1
+      kVal = 0
+    END IF
+
+    isMoveKey = 0
+    IF kVal = 19200 OR kVal = 19712 OR kVal = 18432 OR kVal = 20480 OR kVal = 18176 OR kVal = 20224 OR kVal = 18688 OR kVal = 20736 THEN isMoveKey = 1
+
+    IF isMoveKey = 1 THEN
+      lastActionWasTyping = 0
+      IF _KEYDOWN(100303) OR _KEYDOWN(100304) THEN
+        IF editor.IsSelecting = 0 THEN
+          editor.SelectStartX = editor.CursorX
+          editor.SelectStartY = editor.CursorY
+          editor.IsSelecting = 1
+        END IF
+      ELSE
+        editor.IsSelecting = 0
+      END IF
+    END IF
+
+    IF (kVal >= 32 AND kVal <= 126) OR kVal = 8 OR kVal = 212231 OR kVal = 21248 OR kVal = 13 OR kVal = 118 THEN
+      IF isMoveKey = 0 AND kVal <> 0 THEN
+        IF editor.IsSelecting = 1 THEN
+          undo_StateSave
+          IF (kVal >= 32 AND kVal <= 126) THEN
+            lastActionWasTyping = 1
+          ELSE
+            lastActionWasTyping = 0
+          END IF
+
+          IF kVal = 8 OR kVal = 212231 OR kVal = 21248 THEN
+            deleteSelection
+            editor.IsSelecting = 0
+            kVal = 0 ' Consume key to prevent normal backspace/delete
+          ELSE
+            IF (kVal >= 32 AND kVal <= 126) OR kVal = 13 THEN
+              deleteSelection
+              editor.IsSelecting = 0
+            ELSE
+              editor.IsSelecting = 0
+            END IF
+          END IF
+        END IF
+      END IF
+    END IF
+
+    IF kVal = 118 AND (_KEYDOWN(100306) OR _KEYDOWN(100305)) THEN ' Ctrl+V (Paste)
+      IF editor.IsSelecting = 0 THEN undo_StateSave
+      lastActionWasTyping = 0
+      pasteClipboardText
+      kVal = 0
+    END IF
+
+    IF kVal >= 32 AND kVal <= 126 THEN ' Printable character
+      IF lastActionWasTyping = 0 THEN undo_StateSave
+      lastActionWasTyping = 1
+      currentLine$ = editorText$(editor.CursorY)
+      leftPart$ = LEFT$(currentLine$, editor.CursorX)
+      rightPart$ = MID$(currentLine$, editor.CursorX + 1)
+      editorText$(editor.CursorY) = leftPart$ + CHR$(kVal) + rightPart$
+      editor.CursorX = editor.CursorX + 1
+    END IF
+
+    IF kVal = 8 THEN ' Backspace
+      undo_StateSave
+      lastActionWasTyping = 0
+      IF editor.CursorX > 0 THEN ' Delete character to the left
+        currentLine$ = editorText$(editor.CursorY)
+        leftPart$ = LEFT$(currentLine$, editor.CursorX - 1)
+        rightPart$ = MID$(currentLine$, editor.CursorX + 1)
+        editorText$(editor.CursorY) = leftPart$ + rightPart$
+        editor.CursorX = editor.CursorX - 1
+      ELSE
+        IF editor.CursorY > 1 THEN ' Merge with previous line
+          prevLineLen = LEN(editorText$(editor.CursorY - 1))
+          editor.CursorX = prevLineLen
+          editorText$(editor.CursorY - 1) = editorText$(editor.CursorY - 1) + editorText$(editor.CursorY)
+          FOR ii = editor.CursorY TO editor.LastLine - 1
+            editorText$(ii) = editorText$(ii + 1)
+          NEXT
+          editorText$(editor.LastLine) = ""
+          editor.CursorY = editor.CursorY - 1
+          editor.LastLine = editor.LastLine - 1
+          IF editor.LastLine < 1 THEN editor.LastLine = 1
+        END IF
+      END IF
+    END IF
+
+    IF kVal = 212231 OR kVal = 21248 THEN ' Delete key
+      undo_StateSave
+      lastActionWasTyping = 0
+      currentLine$ = editorText$(editor.CursorY)
+      IF editor.CursorX < LEN(currentLine$) THEN ' Delete character to the right
+        leftPart$ = LEFT$(currentLine$, editor.CursorX)
+        rightPart$ = MID$(currentLine$, editor.CursorX + 2)
+        editorText$(editor.CursorY) = leftPart$ + rightPart$
+      ELSE
+        IF editor.CursorY < lastLine THEN ' Merge next line into current
+          editorText$(editor.CursorY) = currentLine$ + editorText$(editor.CursorY + 1)
+          FOR ii = editor.CursorY + 1 TO editor.LastLine - 1
+            editorText$(ii) = editorText$(ii + 1)
+          NEXT
+          editorText$(editor.LastLine) = ""
+          editor.LastLine = editor.LastLine - 1
+          IF editor.LastLine < 1 THEN editor.LastLine = 1
+        END IF
+      END IF
+    END IF
+
+    IF kVal = 13 THEN ' Enter key, split line at cursor
+      undo_StateSave
+      lastActionWasTyping = 0
+      IF editor.CursorY < EDITOR_LINE_MAX THEN
+        currentLine$ = editorText$(editor.CursorY)
+        leftPart$ = LEFT$(currentLine$, editor.CursorX)
+        rightPart$ = MID$(currentLine$, editor.CursorX + 1)
+        editorText$(editor.CursorY) = leftPart$
+        FOR ii = editor.LastLine TO editor.CursorY + 1 STEP -1
+          IF ii < EDITOR_LINE_MAX THEN
+            editorText$(ii + 1) = editorText$(ii)
+          END IF
+        NEXT
+        editorText$(editor.CursorY + 1) = rightPart$
+        editor.CursorY = editor.CursorY + 1
+        editor.CursorX = 0
+        editor.LastLine = editor.LastLine + 1
+        IF editor.LastLine > EDITOR_LINE_MAX THEN editor.LastLine = EDITOR_LINE_MAX
+        refineCode editor.CursorY - 1, 0
+      END IF
+    END IF
+
+    IF kVal = 19200 THEN ' Left arrow
+      IF editor.CursorX > 0 THEN
+        editor.CursorX = editor.CursorX - 1
+      ELSE
+        IF editor.CursorY > 1 THEN ' Wrap to end of previous line
+          editor.CursorY = editor.CursorY - 1
+          editor.CursorX = LEN(editorText$(editor.CursorY))
+        END IF
+      END IF
+    END IF
+
+    IF kVal = 19712 THEN ' Right arrow
+      IF editor.CursorX < LEN(editorText$(editor.CursorY)) THEN
+        editor.CursorX = editor.CursorX + 1
+      ELSE
+        IF editor.CursorY < lastLine THEN ' Wrap to start of next line
+          editor.CursorY = editor.CursorY + 1
+          editor.CursorX = 0
+        END IF
+      END IF
+    END IF
+
+    IF kVal = 18432 THEN ' Up arrow
+      IF editor.CursorY > 1 THEN
+        editor.CursorY = editor.CursorY - 1
+        IF editor.CursorX > LEN(editorText$(editor.CursorY)) THEN
+          editor.CursorX = LEN(editorText$(editor.CursorY))
+        END IF
+      END IF
+    END IF
+
+    IF kVal = 20480 THEN ' Down arrow
+      IF editor.CursorY < lastLine THEN
+        editor.CursorY = editor.CursorY + 1
+        IF editor.CursorX > LEN(editorText$(editor.CursorY)) THEN
+          editor.CursorX = LEN(editorText$(editor.CursorY))
+        END IF
+      END IF
+    END IF
+
+    IF kVal = 18176 THEN ' Home key, go to start of line
+      editor.CursorX = 0
+    END IF
+
+    IF kVal = 20224 THEN ' End key, go to end of line
+      editor.CursorX = LEN(editorText$(editor.CursorY))
+    END IF
+
+    IF kVal = 18688 THEN ' Page up
+      IF _KEYDOWN(100305) OR _KEYDOWN(100306) THEN
+        editor.CursorY = 1
+        editor.CursorX = 0
+        editor.ScrollY = 1
+        editor.ScrollX = 0
+      ELSE
+        editor.CursorY = editor.CursorY - 28
+        IF editor.CursorY < 1 THEN editor.CursorY = 1
+        IF editor.CursorX > LEN(editorText$(editor.CursorY)) THEN editor.CursorX = LEN(editorText$(editor.CursorY))
+      END IF
+    END IF
+
+    IF kVal = 20736 THEN ' Page down
+      IF _KEYDOWN(100305) OR _KEYDOWN(100306) THEN
+        editor.CursorY = lastLine
+        editor.CursorX = LEN(editorText$(editor.CursorY))
+        editor.ScrollY = lastLine - 27
+        IF editor.ScrollY < 1 THEN editor.ScrollY = 1
+      ELSE
+        editor.CursorY = editor.CursorY + 28
+        IF editor.CursorY > lastLine THEN editor.CursorY = lastLine
+        IF editor.CursorX > LEN(editorText$(editor.CursorY)) THEN editor.CursorX = LEN(editorText$(editor.CursorY))
+      END IF
+    END IF
+
+    IF editor.CursorY < editor.ScrollY THEN editor.ScrollY = editor.CursorY
+    IF editor.CursorY >= editor.ScrollY + 28 THEN editor.ScrollY = editor.CursorY - 27
+
+    IF editor.CursorX < editor.ScrollX THEN editor.ScrollX = editor.CursorX
+    IF editor.CursorX >= editor.ScrollX + 56 THEN editor.ScrollX = editor.CursorX - 55
+
+    IF oldCursorY <> editor.CursorY THEN refineCode oldCursorY, 0
+
+  END IF
+
+END SUB ' processInput
+
+''''''''''''''''''''''''
+'' FUNCTION processVScrollbar (wPosX, wPosY, wSizeX, wSizeY, wTotalItems, wMaxVis, passCurScroll, passDragActive, passDragOffset, wIs1Based) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB pushStatusMsg (wStr$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB redrawAll ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB refineCode (isCompileClick) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION resolveSymbol (vName$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION retCoordinateBoundaries (passStartIdx, passEndIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION retEditorSelection$ ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION retFixedStringLength (vIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION retIatConstByName (wName$, isTira) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION retLabelStripLength$ (passLine$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION retLineNumberStr$ ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION retRtOffsetByName (wName$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION retSymbolByteSize (vIdx) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION retTokenText$ (wTok$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION retTokenVal (wTok$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION retTypeFromToken (tType AS LONG, isUnsigned AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+SUB return2 (wVal)
+
+  ' Return the global secondary return variable
+
+  returnF2data = wVal
+
+END SUB ' return2
+
+''''''''''''''''''''''''
+SUB return3 (wVal)
+
+  ' Return the global tertiary return value
+
+  returnF3data = wVal
+
+END SUB ' return3
+
+''''''''''''''''''''''''
+FUNCTION returnedData2
+
+  returnedData2 = returnF2data
+
+END FUNCTION ' returnedData2
+
+''''''''''''''''''''''''
+FUNCTION returnedData3
+
+  returnedData3 = returnF3data
+
+END FUNCTION ' returnedData3
+
+''''''''''''''''''''''''
+SUB returnExtraPrepare
+
+  ' Call at the top of any function that sends back return 2 or 3 data
+
+  returnF2data = 0
+  returnF3data = 0
+
+END SUB ' returnExtraPrepare
+
+''''''''''''''''''''''''
+'' SUB searchModal ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB setFlashText (wStr$, wTime) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB setPalettes256 ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tasm_DoCast (dest$, src$, targetTypeStr$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tasm_DoMath (opCmd AS LONG, dest$, src1$, src2$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tasm_DoShift (opCmd AS LONG, dest$, src1$, src2$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tasm_DoSwap (addr1$, addr2$, sizeMode$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tasm_DoUnary (opCmd AS LONG, dest$, src$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION tasm_GetOperandType (opStr$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tasm_LoadOperand (opStr$, destReg AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tasm_ProbeStack (allocSize AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tasm_RestoreVolatiles ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tasm_SaveVolatiles ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tasm_StoreOperand (opStr$, srcReg AS LONG, isFloat AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION tasmEndHelper_JMP_COND (condCodeStr$, src1Str$, src2Str$, targetLabel$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION textFileRVA (wFileOffset) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB throwCompilerError (errMsg$, wType, wData) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB throwCompilerErrorAndCancelTira (errMsg$, wType, wData) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB throwCompilerErrorNoLineNum (errMsg$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tira_Cancel ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tira_EndAndProcess ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tira_Start ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION tiraAllocTempMem$ (sizeStr$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraAssign (dest$, src$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraBoundsCheck (idxVar$, limitVar$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraBreak ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraBuildStringDescriptor (descBasePtrVar$, dataPtrVar$, strLenVar$, flagValStr$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraBuildStylePlot (x$, y$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraCall (funcName$, argCount AS LONG, argList$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraCheckActive (callerName$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraClamp (varToClamp$, minStr$, maxStr$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraCmpxchg (destAddr$, cmpVal$, newVal$, sizeMode$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION tiraDimVar$ (baseName$, wDataType AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraEmitPassByRefCopyOut (srcArgIdx AS LONG, targetVarIdx AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraEnsureStringAlloc (descPtrVar$, targetAddrVar$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraFatalError (errorText$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION tiraForceInt$ (srcVar$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION tiraFrontendCalcAddress$ (vName$, indicesStr$, udtOffset AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION tiraGetPrecedence (opVal AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION tiraGetStringData$ (rPassDesc$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION tiraGetStringLen$ (rPassDesc$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraInjectPendingDisplayFlush ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraJmp (labelName$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraJmpCond (cond$, src1$, src2$, labelName$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraJmpUser (labelName$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraLabel (labelName$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION tiraLabelCreateNew$ (baseName$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraLeaSIB (dest$, baseVar$, indexVar$, scaleStr$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION tiraLineCheck ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraMemcpy (destAddr$, srcAddr$, lenVal$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraMemSet (destAddr$, valStr$, lenVal$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraMemSetEx (destAddr$, valStr$, lenVal$, sizeMode$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraNew (opConst AS LONG, argsStr$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraOp (opConst AS LONG, destOrIAT$, src1$, src2$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION tiraParseExpression$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION tiraParseExpressionInt$ (startIdx, endIdx, allowImplicit, errMsg$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION tiraParseExpressionNumeric$ (startIdx, endIdx, allowImplicit, errMsg$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION tiraParseFactor$ (startIdx, endIdx, allowImplicit) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION tiraParseRhsUdtBase$ (startTokIdx, exprEndBoundary, passLhsUdtIndex) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION tiraResolveHoistVar$ (prefix$, suffix$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraRT_Epilogue ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraRT_Prologue ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraScheduleArrayFree (vIdx AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION tiraScheduleFuncOrArray (passOpTop AS LONG, passValTop AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraScheduleGC ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraScheduleHeapReset ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION tiraScheduleShuntingOp (opVal AS LONG, passValTop AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraScheduleSubEpilogue ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraScheduleSubPrologue ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraSetRsp ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraSetSubOffset (subIdx AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION tiraStackVar$ (baseName$, wDataType AS LONG, wOffset AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraSwapMem (addr1$, addr2$, sizeMode$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION tiraWndVar$ (baseName$, wDataType AS LONG) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tiraWriteMem (destAddr$, srcVal$, sizeMode$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB tokenizeLine (wLine$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB undo_StateRestore ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB undo_StateSave ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION updateStackAlignment ' This is in the main file
+
+''''''''''''''''''''''''
+'' FUNCTION verifyNoExtraTokens (passEndIdx, passExpectedEndIdx, passCommandName$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB viewSubsModal ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB waitKeyRelease (wKey$) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB waitTimer (wSeconds) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB writeIdataSection (wTextRawSize) ' This is in the main file
+
+''''''''''''''''''''''''
+'' SUB writePEHeader (wTextRawSize, textVirtualSize, bssRVA) ' This is in the main file
+
+''''''''''''''''''''''''
+SUB ZLOCATE (wX, wY)
+
+  LOCATE wY + 1, wX + 1
+
+END SUB ' ZLOCATE
+
+''''''''''''''''''''''''
+SUB ESCAPE (wVal)
+
+  _DISPLAY
+
+  wStr3$ = " ($" + hexLen$(wVal, 2) + ")"
+  wStr2$ = STR$(wVal)
+  wStr$ = "PROGRAM ENDED WITH CODE:" + LTRIM$(wStr2$) + wStr3$
+  ESCAPETEXT wStr$
+
+END SUB ' ESCAPE
+
+''''''''''''''''''''''''
+SUB ESCAPE2 (wVal1, wVal2)
+
+  _DISPLAY
+
+  wStr1$ = STR$(wVal1)
+  wStr2$ = STR$(wVal2)
+
+  wStr$ = "PROGRAM ENDED WITH CODES:" + LTRIM$(RTRIM$(wStr1$)) + "," + LTRIM$(RTRIM$(wStr2$)) + "  "
+
+  ESCAPETEXT wStr$
+
+END SUB ' ESCAPE2
+
+''''''''''''''''''''''''
+SUB ESCAPETEXT (wStr$)
+
+  ' Do not call redrawAll here, can cause a hang in some cases
+  _DISPLAY
+  COLOR 15
+
+  IF wStr$ = "" THEN wStr$ = "No text sent"
+
+  PrintTextLineWithBanners wStr$, 15, BOTTOM
+
+  END
+
+END SUB ' ESCAPETEXT
+
+''''''''''''''''''''''''
+SUB ESCAPETEXT2 (wStr1$, wStr2$)
+
+  ' Do not call redrawAll here, can cause a hang in some cases
+  _DISPLAY
+  COLOR 15
+
+  IF wStr1$ = "" THEN wStr1$ = "No text sent"
+
+  fileOutputErrorReport wStr1$, wStr2$
+
+  boxW = SCREENSIZEX - 16
+  boxH = 34
+  boxX = 8
+  boxY = SCREENSIZEY - 128
+
+  drawBorderBox boxX, boxY, boxW, boxH, 1, 0
+  drawClearBox boxX + 1, boxY + 1, boxW - 2, boxH - 2, 15
+
+  PrintStr boxX + 8, boxY + 8, wStr1$, 15, 0, 0
+  IF wStr2$ <> "" THEN PrintStr boxX + 8, boxY + 18, wStr2$, 15, 0, 0
+
+  END
+
+END SUB ' ESCAPETEXT2
+
