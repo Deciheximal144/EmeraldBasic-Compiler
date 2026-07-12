@@ -1,0 +1,5631 @@
+' Z_EMLCMD.BLB This is the external library file for EmeraldBasic
+' The line with comment, dollar sign, and INCLUDE 'Z_EMLCMD.BLB' at the end of the EmeraldBasic file link this code in QB64PE
+' For an EmeraldBasic compiler, use '#AUTOINCLUDE at the top of the file
+
+SUB emitRuntimeCircle
+
+  rtOffset(RT_CIRCLE) = stream.emitPos
+
+  tira_Start
+  tiraRT_Prologue
+
+  argCx$ = tiraDimVar$("ARG1", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, argCx$ + ", 1"
+  argCy$ = tiraDimVar$("ARG2", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, argCy$ + ", 2"
+  argR$ = tiraDimVar$("ARG3", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, argR$ + ", 3"
+  argC$ = tiraDimVar$("ARG4", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, argC$ + ", 4"
+
+  x$ = tiraDimVar$("T", TYPE_LONG)
+  y$ = tiraDimVar$("T", TYPE_LONG)
+  errVal$ = tiraDimVar$("T", TYPE_LONG)
+
+  tiraAssign x$, argR$
+  tiraAssign y$, "0"
+  tiraOp TC_SUB, errVal$, "1", x$
+
+  loopTop$ = tiraLabelCreateNew$("CIRC_LOOP")
+  loopDone$ = tiraLabelCreateNew$("CIRC_DONE")
+
+  tiraLabel loopTop$
+  tiraJmpCond "JL", x$, y$, loopDone$
+
+  tmpX$ = tiraDimVar$("T", TYPE_LONG)
+  tmpY$ = tiraDimVar$("T", TYPE_LONG)
+
+  tiraOp TC_ADD, tmpX$, argCx$, x$
+  tiraOp TC_ADD, tmpY$, argCy$, y$
+  tiraCall "RT_PLOT_PIXEL", 3, tmpX$ + ", " + tmpY$ + ", " + argC$
+
+  tiraOp TC_ADD, tmpX$, argCx$, y$
+  tiraOp TC_ADD, tmpY$, argCy$, x$
+  tiraCall "RT_PLOT_PIXEL", 3, tmpX$ + ", " + tmpY$ + ", " + argC$
+
+  tiraOp TC_SUB, tmpX$, argCx$, y$
+  tiraOp TC_ADD, tmpY$, argCy$, x$
+  tiraCall "RT_PLOT_PIXEL", 3, tmpX$ + ", " + tmpY$ + ", " + argC$
+
+  tiraOp TC_SUB, tmpX$, argCx$, x$
+  tiraOp TC_ADD, tmpY$, argCy$, y$
+  tiraCall "RT_PLOT_PIXEL", 3, tmpX$ + ", " + tmpY$ + ", " + argC$
+
+  tiraOp TC_SUB, tmpX$, argCx$, x$
+  tiraOp TC_SUB, tmpY$, argCy$, y$
+  tiraCall "RT_PLOT_PIXEL", 3, tmpX$ + ", " + tmpY$ + ", " + argC$
+
+  tiraOp TC_SUB, tmpX$, argCx$, y$
+  tiraOp TC_SUB, tmpY$, argCy$, x$
+  tiraCall "RT_PLOT_PIXEL", 3, tmpX$ + ", " + tmpY$ + ", " + argC$
+
+  tiraOp TC_ADD, tmpX$, argCx$, y$
+  tiraOp TC_SUB, tmpY$, argCy$, x$
+  tiraCall "RT_PLOT_PIXEL", 3, tmpX$ + ", " + tmpY$ + ", " + argC$
+
+  tiraOp TC_ADD, tmpX$, argCx$, x$
+  tiraOp TC_SUB, tmpY$, argCy$, y$
+  tiraCall "RT_PLOT_PIXEL", 3, tmpX$ + ", " + tmpY$ + ", " + argC$
+
+  tiraOp TC_ADD, y$, y$, "1"
+
+  lblErrPos$ = tiraLabelCreateNew$("CIRC_ERR_POS")
+  tiraJmpCond "JGE", errVal$, "0", lblErrPos$
+
+  tmpErr$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_MUL, tmpErr$, y$, "2"
+  tiraOp TC_ADD, tmpErr$, tmpErr$, "1"
+  tiraOp TC_ADD, errVal$, errVal$, tmpErr$
+  tiraJmp loopTop$
+
+  tiraLabel lblErrPos$
+  tiraOp TC_SUB, x$, x$, "1"
+
+  tmpErr1$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_SUB, tmpErr1$, y$, x$
+  tiraOp TC_ADD, tmpErr1$, tmpErr1$, "1"
+  tiraOp TC_MUL, tmpErr1$, tmpErr1$, "2"
+  tiraOp TC_ADD, errVal$, errVal$, tmpErr1$
+  tiraJmp loopTop$
+
+  tiraLabel loopDone$
+
+  tiraRT_Epilogue
+  tira_EndAndProcess
+
+END SUB ' emitRuntimeCircle
+
+''''''''''''''''''''''''
+SUB emitRuntimeClipboardGet
+
+  rtOffset(RT_GET_CLIPBOARD) = stream.emitPos
+
+  tira_Start
+  tiraRT_Prologue
+
+  ' Retrieve pointer to the uninitialized descriptor struct requesting the copied string
+  descPtr$ = tiraDimVar$("ARG1", TYPE_INTEGER64)
+  tiraNew TC_ABI_READ_ARG, descPtr$ + ", 1"
+
+  lblFail$ = tiraLabelCreateNew$("CGET_FAIL")
+  lblDone$ = tiraLabelCreateNew$("CGET_DONE")
+
+  ' Check if standard string text exists on the clipboard natively via IsClipboardFormatAvailable(CF_TEXT = 1)
+  tiraCall "IAT_ISCLIPBOARDFORMATAVAILABLE", 1, "1"
+  avail$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_GET_RET, avail$
+  tiraJmpCond "JE", avail$, "0", lblFail$
+
+  ' Request ownership of the clipboard hardware
+  tiraCall "IAT_OPENCLIPBOARD", 1, "0"
+  resOpen$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_GET_RET, resOpen$
+  tiraJmpCond "JE", resOpen$, "0", lblFail$
+
+  ' Retrieve Global Handle pointing to the clipboard's CF_TEXT memory
+  tiraCall "IAT_GETCLIPBOARDDATA", 1, "1"
+  hMem$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_GET_RET, hMem$
+  tiraJmpCond "JE", hMem$, "0", lblFail$
+
+  ' Lock hardware memory temporarily to safely read the bytes
+  tiraCall "IAT_GLOBALLOCK", 1, hMem$
+  srcPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_GET_RET, srcPtr$
+  tiraJmpCond "JE", srcPtr$, "0", lblFail$
+
+  lenVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign lenVar$, "0"
+  lblLenTop$ = tiraLabelCreateNew$("CGET_LENTOP")
+  lblLenDone$ = tiraLabelCreateNew$("CGET_LENDONE")
+
+  ' Execute a high-speed manual strlen iteration to identify exactly where the clipboard data stops
+  tiraLabel lblLenTop$
+  checkAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, checkAddr$, srcPtr$, lenVar$
+  byteVal$ = tiraDimVar$("T", TYPE_UBYTE)
+  tiraNew TC_READ_MEM, byteVal$ + ", " + checkAddr$
+  tiraJmpCond "JE", byteVal$, "0", lblLenDone$ ' Stop exactly when the hardware null terminator is found
+  tiraOp TC_ADD, lenVar$, lenVar$, "1"
+  tiraJmp lblLenTop$
+  tiraLabel lblLenDone$
+
+  ' Safely allocate destination buffer internally using Temp Heap methodology to prevent memory leaks
+  tiraOp TC_SUB, "!G_MEM_TEMP_HEAP_PTR", "!G_MEM_TEMP_HEAP_PTR", lenVar$
+  dataPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign dataPtr$, "!G_MEM_TEMP_HEAP_PTR"
+
+  ' Transfer clipboard data into localized execution memory
+  tiraMemcpy dataPtr$, srcPtr$, lenVar$
+
+  tiraCall "IAT_GLOBALUNLOCK", 1, hMem$
+
+  tiraCall "IAT_CLOSECLIPBOARD", 0, ""
+
+  ' Tie the returned address back up to the source descriptor cleanly. Flag is 0 because the string lives on the Temp Heap.
+  tiraBuildStringDescriptor descPtr$, dataPtr$, lenVar$, "0"
+  tiraJmp lblDone$
+
+  tiraLabel lblFail$
+
+  ' If format missing or extraction fails, cleanly fall back and return an empty string safely to avoid crashing
+  tiraBuildStringDescriptor descPtr$, "0", "0", "0"
+  tiraCall "IAT_CLOSECLIPBOARD", 0, ""
+
+  tiraLabel lblDone$
+
+  tiraRT_Epilogue
+  tira_EndAndProcess
+
+END SUB ' emitRuntimeClipboardGet
+
+''''''''''''''''''''''''
+SUB emitRuntimeClipboardSet
+
+  rtOffset(RT_SET_CLIPBOARD) = stream.emitPos
+
+  tira_Start
+  tiraRT_Prologue
+
+  ' Read string descriptor argument directly from caller stack footprint
+  arg1Var$ = tiraDimVar$("ARG1", TYPE_INTEGER64)
+  tiraNew TC_ABI_READ_ARG, arg1Var$ + ", 1"
+
+  dataPtr$ = tiraGetStringData$(arg1Var$)
+  strLen$ = tiraGetStringLen$(arg1Var$)
+
+  lblEmpty$ = tiraLabelCreateNew$("CLIP_EMPTY")
+  lblDone$ = tiraLabelCreateNew$("CLIP_DONE")
+
+  ' Request ownership of the Clipboard hardware natively using parameter zero
+  tiraCall "IAT_OPENCLIPBOARD", 1, "0"
+  resOpen$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_GET_RET, resOpen$
+  tiraJmpCond "JE", resOpen$, "0", lblDone$ ' Failed to open, gracefully abort
+
+  ' We must successfully empty the clipboard before attempting to set new content
+  tiraCall "IAT_EMPTYCLIPBOARD", 0, ""
+
+  ' If the length is empty, jump to the end where we close and return safely
+  tiraJmpCond "JLE", strLen$, "0", lblEmpty$
+
+  ' Request Global Memory block ensuring we include space for the trailing null byte
+  allocSize$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_ADD, allocSize$, strLen$, "1"
+
+  ' GlobalAlloc(GMEM_MOVEABLE = 2, allocSize)
+  tiraCall "IAT_GLOBALALLOC", 2, "2, " + allocSize$
+  hMem$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_GET_RET, hMem$
+
+  tiraJmpCond "JE", hMem$, "0", lblEmpty$ ' Alloc failed, exit cleanly
+
+  ' Lock memory block to retrieve the physical pointer handle
+  tiraCall "IAT_GLOBALLOCK", 1, hMem$
+  destPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_GET_RET, destPtr$
+
+  tiraJmpCond "JE", destPtr$, "0", lblEmpty$ ' Lock failed, exit cleanly
+
+  ' Clone string data into the globally allocated structure
+  tiraMemcpy destPtr$, dataPtr$, strLen$
+
+  ' Inject null terminator physically at the end to satisfy Windows CF_TEXT ABI
+  nullPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, nullPtr$, destPtr$, strLen$
+  tiraWriteMem nullPtr$, "0", "1"
+
+  tiraCall "IAT_GLOBALUNLOCK", 1, hMem$
+
+  ' Finalize data handoff to Windows via SetClipboardData(CF_TEXT = 1, hMem)
+  tiraCall "IAT_SETCLIPBOARDDATA", 2, "1, " + hMem$
+
+  tiraLabel lblEmpty$
+
+  ' We must always release the clipboard so other programs do not get frozen
+  tiraCall "IAT_CLOSECLIPBOARD", 0, ""
+
+  tiraLabel lblDone$
+
+  tiraRT_Epilogue
+  tira_EndAndProcess
+
+END SUB ' emitRuntimeClipboardSet
+
+''''''''''''''''''''''''
+SUB emitRuntimeGfxGet
+
+  rtOffset(RT_GET) = stream.emitPos
+
+  tira_Start
+  tiraRT_Prologue
+
+  argX1$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, argX1$ + ", 1"
+  argY1$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, argY1$ + ", 2"
+  argX2$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, argX2$ + ", 3"
+  argY2$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, argY2$ + ", 4"
+  argPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_ABI_READ_ARG, argPtr$ + ", 5"
+  argEnd$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_ABI_READ_ARG, argEnd$ + ", 6"
+
+  ' Adjust incoming bounds cleanly using the established viewing origin
+  tiraOp TC_ADD, argX1$, argX1$, "!G_GFX_VIEW_OFFSET_X_VAL"
+  tiraOp TC_ADD, argY1$, argY1$, "!G_GFX_VIEW_OFFSET_Y_VAL"
+  tiraOp TC_ADD, argX2$, argX2$, "!G_GFX_VIEW_OFFSET_X_VAL"
+  tiraOp TC_ADD, argY2$, argY2$, "!G_GFX_VIEW_OFFSET_Y_VAL"
+
+  ' Swap X bounds if X1 > X2
+  ptr1$ = tiraDimVar$("T", TYPE_INTEGER64)
+  ptr2$ = tiraDimVar$("T", TYPE_INTEGER64)
+
+  skipXSwap$ = tiraLabelCreateNew$("GET_SKIP_X")
+  tiraJmpCond "JLE", argX1$, argX2$, skipXSwap$
+  tiraOp TC_ADDRESS_OF, ptr1$, argX1$, ""
+  tiraOp TC_ADDRESS_OF, ptr2$, argX2$, ""
+  tiraSwapMem ptr1$, ptr2$, "4"
+  tiraLabel skipXSwap$
+
+  ' Swap Y bounds if Y1 > Y2
+  skipYSwap$ = tiraLabelCreateNew$("GET_SKIP_Y")
+  tiraJmpCond "JLE", argY1$, argY2$, skipYSwap$
+  tiraOp TC_ADDRESS_OF, ptr1$, argY1$, ""
+  tiraOp TC_ADDRESS_OF, ptr2$, argY2$, ""
+  tiraSwapMem ptr1$, ptr2$, "4"
+  tiraLabel skipYSwap$
+
+  ' Calculate array width metrics into width$
+  width$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_SUB, width$, argX2$, argX1$
+  tiraOp TC_ADD, width$, width$, "1"
+
+  ' Calculate array height metrics into height$
+  height$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_SUB, height$, argY2$, argY1$
+  tiraOp TC_ADD, height$, height$, "1"
+
+  ' Perform an Array Bounds Limit Check to ensure we have enough space for the header
+  chkPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, chkPtr$, argPtr$, "8"
+  doneLbl$ = tiraLabelCreateNew$("GET_DONE")
+  tiraJmpCond "JG", chkPtr$, argEnd$, doneLbl$
+
+  ' Directly embed our dimensional metrics into the array structure exactly like native QBasic
+  tiraWriteMem argPtr$, width$, "4"
+
+  heightPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, heightPtr$, argPtr$, "4"
+  tiraWriteMem heightPtr$, height$, "4"
+
+  tiraOp TC_ADD, argPtr$, argPtr$, "8"
+
+  ' Fetch Framebuffer Base from user working buffer
+  fbBase$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign fbBase$, "!G_FRAMEBUF_BACK_PTR"
+
+  ' Execute outer rendering loop tracking Y iterations
+  iterY$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign iterY$, argY1$
+
+  loopY$ = tiraLabelCreateNew$("GET_LOOP_Y")
+  tiraLabel loopY$
+  tiraJmpCond "JG", iterY$, argY2$, doneLbl$
+
+  ' Execute inner rendering loop tracking X iterations
+  iterX$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign iterX$, argX1$
+
+  loopX$ = tiraLabelCreateNew$("GET_LOOP_X")
+  tiraLabel loopX$
+  endXLbl$ = tiraLabelCreateNew$("GET_END_X")
+  tiraJmpCond "JG", iterX$, argX2$, endXLbl$
+
+  ' Clip boundaries to prevent reading outside the physical window coordinates
+  pixel$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign pixel$, "0"
+
+  skipBounds$ = tiraLabelCreateNew$("GET_SKIP_BND")
+
+  tiraJmpCond "JL", iterX$, "!G_GFX_VIEW_X1_VAL", skipBounds$
+  tiraJmpCond "JGE", iterX$, "!G_GFX_VIEW_X2_VAL", skipBounds$
+  tiraJmpCond "JL", iterY$, "!G_GFX_VIEW_Y1_VAL", skipBounds$
+  tiraJmpCond "JGE", iterY$, "!G_GFX_VIEW_Y2_VAL", skipBounds$
+
+  ' Speed boost optimization: Unsigned JAE bounds check validates both < 0 and >= max simultaneously
+  tiraJmpCond "JAE", iterX$, cTrNum$(gfxConfig.SizeX), skipBounds$
+  tiraJmpCond "JAE", iterY$, cTrNum$(gfxConfig.SizeY), skipBounds$
+
+  ' Scan pixel byte from memory safely within visual area
+  offset$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_MUL, offset$, iterY$, cTrNum$(gfxConfig.SizeX)
+  tiraOp TC_ADD, offset$, offset$, iterX$
+
+  pixAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, pixAddr$, fbBase$, offset$
+
+  pixel8$ = tiraDimVar$("T", TYPE_UBYTE)
+  tiraNew TC_READ_MEM, pixel8$ + ", " + pixAddr$
+  tiraAssign pixel$, pixel8$
+
+  tiraLabel skipBounds$
+
+  ' Copy scanned value into memory array structure with protective constraints
+  skipWrite$ = tiraLabelCreateNew$("GET_SKIP_WR")
+  tiraJmpCond "JGE", argPtr$, argEnd$, skipWrite$
+  tiraWriteMem argPtr$, pixel$, "1"
+  tiraOp TC_ADD, argPtr$, argPtr$, "1"
+  tiraLabel skipWrite$
+
+  ' X++
+  tiraOp TC_ADD, iterX$, iterX$, "1"
+  tiraJmp loopX$
+
+  ' Y++
+  tiraLabel endXLbl$
+  tiraOp TC_ADD, iterY$, iterY$, "1"
+  tiraJmp loopY$
+
+  tiraLabel doneLbl$
+
+  tiraRT_Epilogue
+  tira_EndAndProcess
+
+END SUB ' emitRuntimeGfxGet
+
+''''''''''''''''''''''''
+SUB emitRuntimeGfxPut
+
+  rtOffset(RT_PUT) = stream.emitPos
+
+  tira_Start
+  tiraRT_Prologue
+
+  arg1Var$ = tiraDimVar$("ARG1", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, arg1Var$ + ", 1"
+  arg2Var$ = tiraDimVar$("ARG2", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, arg2Var$ + ", 2"
+  arg3Var$ = tiraDimVar$("ARG3", TYPE_INTEGER64)
+  tiraNew TC_ABI_READ_ARG, arg3Var$ + ", 3"
+  arg4Var$ = tiraDimVar$("ARG4", TYPE_INTEGER64)
+  tiraNew TC_ABI_READ_ARG, arg4Var$ + ", 4"
+  arg5Var$ = tiraDimVar$("ARG5", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, arg5Var$ + ", 5"
+
+  argX$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign argX$, arg1Var$
+  tiraOp TC_ADD, argX$, argX$, "!G_GFX_VIEW_OFFSET_X_VAL"
+
+  argY$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign argY$, arg2Var$
+  tiraOp TC_ADD, argY$, argY$, "!G_GFX_VIEW_OFFSET_Y_VAL"
+
+  ptr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign ptr$, arg3Var$
+  endPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign endPtr$, arg4Var$
+
+  jmpDonePut1$ = tiraLabelCreateNew$("PUT_DONE1")
+  jmpDonePut2$ = tiraLabelCreateNew$("PUT_DONE2")
+
+  ' Check if we have at least 8 bytes available for the array width/height header
+  chkPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, chkPtr$, ptr$, "8"
+  tiraJmpCond "JG", chkPtr$, endPtr$, jmpDonePut1$
+
+  ' Read width and height natively via TIRA memory indirection
+  width$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_READ_MEM, width$ + ", " + ptr$
+
+  height$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_READ_MEM_OFFSET, height$ + ", " + ptr$ + ", 4"
+
+  tiraOp TC_ADD, ptr$, ptr$, "8"
+
+  fbBase$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign fbBase$, "!G_FRAMEBUF_BACK_PTR"
+
+  iterY$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign iterY$, "0"
+
+  ' Outer Loop Y
+  lblLoopY$ = tiraLabelCreateNew$("PUT_LOOP_Y")
+  tiraLabel lblLoopY$
+  tiraJmpCond "JGE", iterY$, height$, jmpDonePut2$
+
+  iterX$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign iterX$, "0"
+
+  ' Inner Loop X
+  lblLoopX$ = tiraLabelCreateNew$("PUT_LOOP_X")
+  tiraLabel lblLoopX$
+
+  jmpEndX$ = tiraLabelCreateNew$("PUT_END_X")
+  tiraJmpCond "JGE", iterX$, width$, jmpEndX$
+
+  jmpSkipRead$ = tiraLabelCreateNew$("PUT_SKIP_RD")
+  tiraJmpCond "JGE", ptr$, endPtr$, jmpSkipRead$
+
+  pixel8$ = tiraDimVar$("T", TYPE_UBYTE)
+  tiraNew TC_READ_MEM, pixel8$ + ", " + ptr$
+  pixel$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign pixel$, pixel8$
+
+  tiraOp TC_ADD, ptr$, ptr$, "1"
+
+  jmpCheckBounds$ = tiraLabelCreateNew$("PUT_CHK_BND")
+  tiraJmp jmpCheckBounds$
+
+  tiraLabel jmpSkipRead$
+  tiraAssign pixel$, "0"
+  tiraLabel jmpCheckBounds$
+
+  absX$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_ADD, absX$, argX$, iterX$
+  absY$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_ADD, absY$, argY$, iterY$
+
+  jmpSkipDraw$ = tiraLabelCreateNew$("PUT_SKIP_DRW")
+
+  tiraJmpCond "JL", absX$, "!G_GFX_VIEW_X1_VAL", jmpSkipDraw$
+  tiraJmpCond "JGE", absX$, "!G_GFX_VIEW_X2_VAL", jmpSkipDraw$
+  tiraJmpCond "JL", absY$, "!G_GFX_VIEW_Y1_VAL", jmpSkipDraw$
+  tiraJmpCond "JGE", absY$, "!G_GFX_VIEW_Y2_VAL", jmpSkipDraw$
+
+  ' Speed boost optimization: Unsigned JAE bounds check validates both < 0 and >= max simultaneously
+  tiraJmpCond "JAE", absX$, cTrNum$(gfxConfig.SizeX), jmpSkipDraw$
+  tiraJmpCond "JAE", absY$, cTrNum$(gfxConfig.SizeY), jmpSkipDraw$
+
+  offset$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_MUL, offset$, absY$, cTrNum$(gfxConfig.SizeX)
+  tiraOp TC_ADD, offset$, offset$, absX$
+
+  fbTarget$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, fbTarget$, fbBase$, offset$
+
+  ' Put Mode Support (0=PSET, 1=XOR, 2=AND, 3=OR)
+  lblModePset$ = tiraLabelCreateNew$("PUT_MODE_PSET")
+  lblModeAnd$ = tiraLabelCreateNew$("PUT_MODE_AND")
+  lblModeOr$ = tiraLabelCreateNew$("PUT_MODE_OR")
+  lblModeEnd$ = tiraLabelCreateNew$("PUT_MODE_END")
+
+  tiraJmpCond "JE", arg5Var$, "0", lblModePset$
+
+  bgPixel8$ = tiraDimVar$("T", TYPE_UBYTE)
+  tiraNew TC_READ_MEM, bgPixel8$ + ", " + fbTarget$
+
+  bgPixel$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign bgPixel$, bgPixel8$
+
+  tiraJmpCond "JE", arg5Var$, "2", lblModeAnd$
+  tiraJmpCond "JE", arg5Var$, "3", lblModeOr$
+
+  ' Default to XOR if 1 (or unrecognized fallback)
+  tiraOp TC_XOR, pixel$, pixel$, bgPixel$
+  tiraJmp lblModeEnd$
+
+  tiraLabel lblModeAnd$
+  tiraOp TC_AND, pixel$, pixel$, bgPixel$
+  tiraJmp lblModeEnd$
+
+  tiraLabel lblModeOr$
+  tiraOp TC_OR, pixel$, pixel$, bgPixel$
+  tiraJmp lblModeEnd$
+
+  tiraLabel lblModePset$
+  tiraLabel lblModeEnd$
+
+  tiraWriteMem fbTarget$, pixel$, "1"
+
+  tiraLabel jmpSkipDraw$
+
+  tiraOp TC_ADD, iterX$, iterX$, "1"
+  tiraJmp lblLoopX$
+
+  tiraLabel jmpEndX$
+  tiraOp TC_ADD, iterY$, iterY$, "1"
+  tiraJmp lblLoopY$
+
+  tiraLabel jmpDonePut1$
+  tiraLabel jmpDonePut2$
+
+  tiraTriggerAutoDisplay
+
+  tiraRT_Epilogue
+  tira_EndAndProcess
+
+END SUB ' emitRuntimeGfxPut
+
+''''''''''''''''''''''''
+SUB emitRuntimeMouseInput
+
+  rtOffset(RT_MOUSEINPUT) = stream.emitPos
+
+  tira_Start
+  tiraRT_Prologue
+
+  headPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADDRESS_OF, headPtr$, "!G_LAYOUT_MOUSE_HEAD_VAL", ""
+  headVal$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_READ_MEM, headVal$ + ", " + headPtr$
+
+  tailPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADDRESS_OF, tailPtr$, "!G_LAYOUT_MOUSE_TAIL_VAL", ""
+  tailVal$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_READ_MEM, tailVal$ + ", " + tailPtr$
+
+  retVal$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign retVal$, "0"
+
+  emptyLbl$ = tiraLabelCreateNew$("MI_EMPTY")
+  tiraJmpCond "JE", headVal$, tailVal$, emptyLbl$
+
+  bufArrPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADDRESS_OF, bufArrPtr$, "!G_LAYOUT_MOUSE_BUF_ARR", ""
+
+  offsetVal$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_MUL, offsetVal$, tailVal$, "16"
+
+  recPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, recPtr$, bufArrPtr$, offsetVal$
+
+  mouseX$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_READ_MEM, mouseX$ + ", " + recPtr$
+  tiraAssign "!G_IO_MOUSE_X_VAL", mouseX$
+
+  mouseY$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_READ_MEM_OFFSET, mouseY$ + ", " + recPtr$ + ", 4"
+  tiraAssign "!G_IO_MOUSE_Y_VAL", mouseY$
+
+  mouseWheel$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_READ_MEM_OFFSET, mouseWheel$ + ", " + recPtr$ + ", 8"
+  tiraAssign "!G_IO_MOUSE_SCRL_VAL", mouseWheel$
+
+  mouseBtns$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_READ_MEM_OFFSET, mouseBtns$ + ", " + recPtr$ + ", 12"
+
+  b1$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_AND, b1$, mouseBtns$, "1"
+  b1State$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign b1State$, "0"
+  skipB1$ = tiraLabelCreateNew$("MI_SKIPB1")
+  tiraJmpCond "JE", b1$, "0", skipB1$
+  tiraAssign b1State$, "-1"
+  tiraLabel skipB1$
+  tiraAssign "!G_IO_MOUSE_B1_VAL", b1State$
+
+  b2$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_AND, b2$, mouseBtns$, "2"
+  b2State$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign b2State$, "0"
+  skipB2$ = tiraLabelCreateNew$("MI_SKIPB2")
+  tiraJmpCond "JE", b2$, "0", skipB2$
+  tiraAssign b2State$, "-1"
+  tiraLabel skipB2$
+  tiraAssign "!G_IO_MOUSE_B2_VAL", b2State$
+
+  b3$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_AND, b3$, mouseBtns$, "4"
+  b3State$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign b3State$, "0"
+  skipB3$ = tiraLabelCreateNew$("MI_SKIPB3")
+  tiraJmpCond "JE", b3$, "0", skipB3$
+  tiraAssign b3State$, "-1"
+  tiraLabel skipB3$
+  tiraAssign "!G_IO_MOUSE_B3_VAL", b3State$
+
+  tiraOp TC_ADD, tailVal$, tailVal$, "1"
+  tiraOp TC_AND, tailVal$, tailVal$, "511"
+  tiraWriteMem tailPtr$, tailVal$, "4"
+
+  tiraAssign retVal$, "-1"
+
+  tiraLabel emptyLbl$
+
+  tiraNew TC_ABI_WRITE_RET, retVal$
+
+  tiraRT_Epilogue
+  tira_EndAndProcess
+
+END SUB ' emitRuntimeMouseInput
+
+''''''''''''''''''''''''
+SUB emitRuntimePaint
+
+  rtOffset(RT_PAINT) = stream.emitPos
+
+  tira_Start
+  tiraRT_Prologue
+
+  argX$ = tiraDimVar$("ARG1", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, argX$ + ", 1"
+  argY$ = tiraDimVar$("ARG2", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, argY$ + ", 2"
+  argFillVar$ = tiraDimVar$("ARG3", TYPE_INTEGER64)
+  tiraNew TC_ABI_READ_ARG, argFillVar$ + ", 3"
+  argIsStr$ = tiraDimVar$("ARG4", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, argIsStr$ + ", 4"
+  argBorder$ = tiraDimVar$("ARG5", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, argBorder$ + ", 5"
+
+  doneLbl$ = tiraLabelCreateNew$("PAINT_END")
+
+  tiraOp TC_ADD, argX$, argX$, "!G_GFX_VIEW_OFFSET_X_VAL"
+  tiraOp TC_ADD, argY$, argY$, "!G_GFX_VIEW_OFFSET_Y_VAL"
+
+  tiraOp TC_AND, argBorder$, argBorder$, "255"
+
+  ' Verify starting bounds are safely within drawing view
+  tiraJmpCond "JL", argX$, "!G_GFX_VIEW_X1_VAL", doneLbl$
+  tiraJmpCond "JGE", argX$, "!G_GFX_VIEW_X2_VAL", doneLbl$
+  tiraJmpCond "JL", argY$, "!G_GFX_VIEW_Y1_VAL", doneLbl$
+  tiraJmpCond "JGE", argY$, "!G_GFX_VIEW_Y2_VAL", doneLbl$
+
+  ' Prevent infinite loops for identically matched solid color fills
+  skipInitCheck$ = tiraLabelCreateNew$("PAINT_SKIP_INIT")
+  tiraJmpCond "JE", argIsStr$, "1", skipInitCheck$
+
+  fillMask$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_AND, fillMask$, argFillVar$, "255"
+
+  offsetStart$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_MUL, offsetStart$, argY$, cTrNum$(gfxConfig.SizeX)
+  tiraOp TC_ADD, offsetStart$, offsetStart$, argX$
+
+  fPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, fPtr$, "!G_FRAMEBUF_BACK_PTR", offsetStart$
+
+  fByte$ = tiraDimVar$("T", TYPE_UBYTE)
+  tiraNew TC_READ_MEM, fByte$ + ", " + fPtr$
+
+  tiraJmpCond "JE", fByte$, fillMask$, doneLbl$
+
+  tiraLabel skipInitCheck$
+
+  ' Allocate memory for the recursive stack mapping securely on the temporary heap
+  memBlock$ = tiraAllocTempMem$("1500000")
+  visitedBase$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign visitedBase$, memBlock$
+  queueBase$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, queueBase$, memBlock$, "1200000"
+
+  ' Clear visited array to prepare for clean memory tracking
+  fbSize$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_MUL, fbSize$, cTrNum$(gfxConfig.SizeX), cTrNum$(gfxConfig.SizeY)
+  tiraMemSet visitedBase$, "0", fbSize$
+
+  qHead$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign qHead$, "0"
+  qTail$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign qTail$, "0"
+
+  pushX$ = tiraDimVar$("T", TYPE_LONG)
+  pushY$ = tiraDimVar$("T", TYPE_LONG)
+  qOffset$ = tiraDimVar$("T", TYPE_LONG)
+  qPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+
+  tiraAssign pushX$, argX$
+  tiraAssign pushY$, argY$
+
+  tiraOp TC_MUL, qOffset$, qHead$, "8"
+  tiraOp TC_ADD, qPtr$, queueBase$, qOffset$
+  tiraWriteMem qPtr$, pushX$, "4"
+  tiraNew TC_WRITE_MEM_OFFSET, qPtr$ + ", 4, " + pushY$ + ", 4"
+  tiraOp TC_ADD, qHead$, qHead$, "1"
+
+  popX$ = tiraDimVar$("T", TYPE_LONG)
+  popY$ = tiraDimVar$("T", TYPE_LONG)
+  curX$ = tiraDimVar$("T", TYPE_LONG)
+  curY$ = tiraDimVar$("T", TYPE_LONG)
+
+  checkX$ = tiraDimVar$("T", TYPE_LONG)
+  checkY$ = tiraDimVar$("T", TYPE_LONG)
+  isValid$ = tiraDimVar$("T", TYPE_LONG)
+  vOffset$ = tiraDimVar$("T", TYPE_LONG)
+  vPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  vByte$ = tiraDimVar$("T", TYPE_UBYTE)
+  cByte$ = tiraDimVar$("T", TYPE_UBYTE)
+  cPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+
+  loopTop$ = tiraLabelCreateNew$("PAINT_LOOP")
+  tiraLabel loopTop$
+
+  tiraJmpCond "JE", qHead$, qTail$, doneLbl$
+
+  tiraOp TC_MUL, qOffset$, qTail$, "8"
+  tiraOp TC_ADD, qPtr$, queueBase$, qOffset$
+  tiraNew TC_READ_MEM, popX$ + ", " + qPtr$
+  tiraNew TC_READ_MEM_OFFSET, popY$ + ", " + qPtr$ + ", 4"
+  tiraOp TC_ADD, qTail$, qTail$, "1"
+
+  tiraAssign curX$, popX$
+  tiraAssign curY$, popY$
+
+  lblMoveLeft$ = tiraLabelCreateNew$("PAINT_LEFT")
+  lblMoveLeftEnd$ = tiraLabelCreateNew$("PAINT_LEFT_END")
+  tiraLabel lblMoveLeft$
+  tiraOp TC_SUB, curX$, curX$, "1"
+  tiraAssign checkX$, curX$
+  tiraAssign checkY$, curY$
+
+  tiraAssign isValid$, "0"
+  tiraJmpCond "JL", checkX$, "!G_GFX_VIEW_X1_VAL", lblMoveLeftEnd$
+  tiraJmpCond "JGE", checkX$, "!G_GFX_VIEW_X2_VAL", lblMoveLeftEnd$
+  tiraJmpCond "JL", checkY$, "!G_GFX_VIEW_Y1_VAL", lblMoveLeftEnd$
+  tiraJmpCond "JGE", checkY$, "!G_GFX_VIEW_Y2_VAL", lblMoveLeftEnd$
+  tiraOp TC_MUL, vOffset$, checkY$, cTrNum$(gfxConfig.SizeX)
+  tiraOp TC_ADD, vOffset$, vOffset$, checkX$
+  tiraOp TC_ADD, vPtr$, visitedBase$, vOffset$
+  tiraNew TC_READ_MEM, vByte$ + ", " + vPtr$
+  tiraJmpCond "JNE", vByte$, "0", lblMoveLeftEnd$
+  tiraOp TC_ADD, cPtr$, "!G_FRAMEBUF_BACK_PTR", vOffset$
+  tiraNew TC_READ_MEM, cByte$ + ", " + cPtr$
+  tiraJmpCond "JE", cByte$, argBorder$, lblMoveLeftEnd$
+  tiraAssign isValid$, "1"
+  tiraJmp lblMoveLeft$
+  tiraLabel lblMoveLeftEnd$
+
+  tiraOp TC_ADD, curX$, curX$, "1"
+
+  spanAbove$ = tiraDimVar$("T", TYPE_LONG)
+  spanBelow$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign spanAbove$, "0"
+  tiraAssign spanBelow$, "0"
+
+  lblScan$ = tiraLabelCreateNew$("PAINT_SCAN")
+  lblScanEnd$ = tiraLabelCreateNew$("PAINT_SCAN_END")
+  tiraLabel lblScan$
+  tiraAssign checkX$, curX$
+  tiraAssign checkY$, curY$
+
+  tiraAssign isValid$, "0"
+  tiraJmpCond "JL", checkX$, "!G_GFX_VIEW_X1_VAL", lblScanEnd$
+  tiraJmpCond "JGE", checkX$, "!G_GFX_VIEW_X2_VAL", lblScanEnd$
+  tiraJmpCond "JL", checkY$, "!G_GFX_VIEW_Y1_VAL", lblScanEnd$
+  tiraJmpCond "JGE", checkY$, "!G_GFX_VIEW_Y2_VAL", lblScanEnd$
+  tiraOp TC_MUL, vOffset$, checkY$, cTrNum$(gfxConfig.SizeX)
+  tiraOp TC_ADD, vOffset$, vOffset$, checkX$
+  tiraOp TC_ADD, vPtr$, visitedBase$, vOffset$
+  tiraNew TC_READ_MEM, vByte$ + ", " + vPtr$
+  tiraJmpCond "JNE", vByte$, "0", lblScanEnd$
+  tiraOp TC_ADD, cPtr$, "!G_FRAMEBUF_BACK_PTR", vOffset$
+  tiraNew TC_READ_MEM, cByte$ + ", " + cPtr$
+  tiraJmpCond "JE", cByte$, argBorder$, lblScanEnd$
+  tiraAssign isValid$, "1"
+
+  tiraWriteMem vPtr$, "1", "1"
+
+  lblSolid$ = tiraLabelCreateNew$("PAINT_SOLID")
+  lblApply$ = tiraLabelCreateNew$("PAINT_APPLY")
+  drawColor$ = tiraDimVar$("T", TYPE_LONG)
+
+  tiraJmpCond "JE", argIsStr$, "0", lblSolid$
+
+  strLen$ = tiraGetStringLen$(argFillVar$)
+  strData$ = tiraGetStringData$(argFillVar$)
+  tiraJmpCond "JLE", strLen$, "0", lblSolid$
+
+  ' SCREEN 13 natively treats tiling string bytes as entire scanline color fills
+  patIdx$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_MOD, patIdx$, curY$, strLen$
+
+  charPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, charPtr$, strData$, patIdx$
+
+  charByte$ = tiraDimVar$("T", TYPE_UBYTE)
+  tiraNew TC_READ_MEM, charByte$ + ", " + charPtr$
+  tiraAssign drawColor$, charByte$
+
+  tiraJmp lblApply$
+
+  tiraLabel lblSolid$
+  tiraAssign drawColor$, fillMask$
+
+  tiraLabel lblApply$
+  tiraWriteMem cPtr$, drawColor$, "1"
+
+  lblAboveSkip$ = tiraLabelCreateNew$("PAINT_ABOVE_SKIP")
+  lblAboveDone$ = tiraLabelCreateNew$("PAINT_ABOVE_DONE")
+  tiraOp TC_SUB, checkY$, curY$, "1"
+  tiraAssign checkX$, curX$
+  tiraAssign isValid$, "0"
+  tiraJmpCond "JL", checkX$, "!G_GFX_VIEW_X1_VAL", lblAboveSkip$
+  tiraJmpCond "JGE", checkX$, "!G_GFX_VIEW_X2_VAL", lblAboveSkip$
+  tiraJmpCond "JL", checkY$, "!G_GFX_VIEW_Y1_VAL", lblAboveSkip$
+  tiraJmpCond "JGE", checkY$, "!G_GFX_VIEW_Y2_VAL", lblAboveSkip$
+  tiraOp TC_MUL, vOffset$, checkY$, cTrNum$(gfxConfig.SizeX)
+  tiraOp TC_ADD, vOffset$, vOffset$, checkX$
+  tiraOp TC_ADD, vPtr$, visitedBase$, vOffset$
+  tiraNew TC_READ_MEM, vByte$ + ", " + vPtr$
+  tiraJmpCond "JNE", vByte$, "0", lblAboveSkip$
+  tiraOp TC_ADD, cPtr$, "!G_FRAMEBUF_BACK_PTR", vOffset$
+  tiraNew TC_READ_MEM, cByte$ + ", " + cPtr$
+  tiraJmpCond "JE", cByte$, argBorder$, lblAboveSkip$
+  tiraAssign isValid$, "1"
+  tiraJmpCond "JNE", spanAbove$, "0", lblAboveDone$
+  tiraAssign pushX$, curX$
+  tiraAssign pushY$, checkY$
+  tiraOp TC_MUL, qOffset$, qHead$, "8"
+  tiraOp TC_ADD, qPtr$, queueBase$, qOffset$
+  tiraWriteMem qPtr$, pushX$, "4"
+  tiraNew TC_WRITE_MEM_OFFSET, qPtr$ + ", 4, " + pushY$ + ", 4"
+  tiraOp TC_ADD, qHead$, qHead$, "1"
+  tiraAssign spanAbove$, "1"
+  tiraJmp lblAboveDone$
+
+  tiraLabel lblAboveSkip$
+  tiraAssign spanAbove$, "0"
+  tiraLabel lblAboveDone$
+
+  lblBelowSkip$ = tiraLabelCreateNew$("PAINT_BELOW_SKIP")
+  lblBelowDone$ = tiraLabelCreateNew$("PAINT_BELOW_DONE")
+  tiraOp TC_ADD, checkY$, curY$, "1"
+  tiraAssign checkX$, curX$
+  tiraAssign isValid$, "0"
+  tiraJmpCond "JL", checkX$, "!G_GFX_VIEW_X1_VAL", lblBelowSkip$
+  tiraJmpCond "JGE", checkX$, "!G_GFX_VIEW_X2_VAL", lblBelowSkip$
+  tiraJmpCond "JL", checkY$, "!G_GFX_VIEW_Y1_VAL", lblBelowSkip$
+  tiraJmpCond "JGE", checkY$, "!G_GFX_VIEW_Y2_VAL", lblBelowSkip$
+  tiraOp TC_MUL, vOffset$, checkY$, cTrNum$(gfxConfig.SizeX)
+  tiraOp TC_ADD, vOffset$, vOffset$, checkX$
+  tiraOp TC_ADD, vPtr$, visitedBase$, vOffset$
+  tiraNew TC_READ_MEM, vByte$ + ", " + vPtr$
+  tiraJmpCond "JNE", vByte$, "0", lblBelowSkip$
+  tiraOp TC_ADD, cPtr$, "!G_FRAMEBUF_BACK_PTR", vOffset$
+  tiraNew TC_READ_MEM, cByte$ + ", " + cPtr$
+  tiraJmpCond "JE", cByte$, argBorder$, lblBelowSkip$
+  tiraAssign isValid$, "1"
+  tiraJmpCond "JNE", spanBelow$, "0", lblBelowDone$
+  tiraAssign pushX$, curX$
+  tiraAssign pushY$, checkY$
+  tiraOp TC_MUL, qOffset$, qHead$, "8"
+  tiraOp TC_ADD, qPtr$, queueBase$, qOffset$
+  tiraWriteMem qPtr$, pushX$, "4"
+  tiraNew TC_WRITE_MEM_OFFSET, qPtr$ + ", 4, " + pushY$ + ", 4"
+  tiraOp TC_ADD, qHead$, qHead$, "1"
+  tiraAssign spanBelow$, "1"
+  tiraJmp lblBelowDone$
+
+  tiraLabel lblBelowSkip$
+  tiraAssign spanBelow$, "0"
+  tiraLabel lblBelowDone$
+
+  tiraOp TC_ADD, curX$, curX$, "1"
+  tiraJmp lblScan$
+  tiraLabel lblScanEnd$
+
+  tiraJmp loopTop$
+
+  tiraLabel doneLbl$
+
+  tiraRT_Epilogue
+  tira_EndAndProcess
+
+END SUB ' emitRuntimePaint
+
+''''''''''''''''''''''''
+FUNCTION parse_ATN$ (startIdx, endIdx, allowImplicit)
+
+  DIM arg1$
+  DIM scratchName$
+  DIM resVar$
+  DIM singleRes$
+  DIM argFloat$
+  DIM retType AS LONG
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "ATN", 3) = 0 THEN
+    parse_ATN$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  ' In QB64 is outputs as SINGLE, so it is Emerald mode that will allow more than that
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+
+  arg1$ = tiraParseExpressionNumeric$(startIdx + 2, endIdx - 1, allowImplicit, "INTRINSIC REQUIRES NUMERIC")
+  IF arg1$ = "" THEN
+    parse_ATN$ = ""
+    EXIT FUNCTION
+  END IF
+
+  retType = TYPE_SINGLE
+  IF compileEmeraldMode = 1 THEN
+    IF exprIs.DataType = TYPE_DOUBLE THEN retType = TYPE_DOUBLE
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("ATN", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_ATN$ = ""
+    EXIT FUNCTION
+  END IF
+
+  ' Explicitly override the integer prefix rule to safely route as the correct float type
+  ff = resolveSymbol(scratchName$)
+  IF ff = 1 THEN symbols(returnedData2).DataType = retType
+
+  resVar$ = tiraDimVar$("T", TYPE_DOUBLE)
+
+  ' Coerce the argument to a double for the external IAT function
+  IF exprIs.DataType <> TYPE_DOUBLE THEN
+    argFloat$ = tiraDimVar$("T", TYPE_DOUBLE)
+    tiraOp TC_CAST, argFloat$, arg1$, LTRIM$(STR$(TYPE_DOUBLE))
+    arg1$ = argFloat$
+  END IF
+
+  tiraCall "IAT_ATAN", 1, arg1$
+  tiraNew TC_GET_RET, resVar$
+
+  IF retType = TYPE_SINGLE THEN
+    singleRes$ = tiraDimVar$("T", TYPE_SINGLE)
+    tiraOp TC_CAST, singleRes$, resVar$, LTRIM$(STR$(TYPE_SINGLE))
+    tiraAssign scratchName$, singleRes$
+  ELSE
+    tiraAssign scratchName$, resVar$
+  END IF
+
+  tira_EndAndProcess
+
+  exprIs.DataType = retType
+  exprIs.IsTemp = 1
+  parse_ATN$ = scratchName$
+
+END FUNCTION ' parse_ATN$
+
+''''''''''''''''''''''''
+FUNCTION parse_BEEP (startIdx)
+
+  DIM endIdx AS LONG
+
+  endIdx = lineTokenCount - 1
+
+  ff = verifyNoExtraTokens(endIdx, startIdx, "BEEP")
+  IF ff = 0 THEN EXIT FUNCTION
+
+  tira_Start
+  tiraCall "IAT_BEEP", 2, "800, 250"
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_BEEP = 1
+
+END FUNCTION ' parse_BEEP
+
+''''''''''''''''''''''''
+FUNCTION parse_BLUE32$ (startIdx, endIdx, allowImplicit)
+
+  DIM arg1$
+  DIM scratchName$
+  DIM resVar$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "_BLUE32", 3) = 0 THEN
+    parse_BLUE32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+
+  arg1$ = tiraParseExpressionInt$(startIdx + 2, endIdx - 1, allowImplicit, "_BLUE32 ARG MUST BE NUMERIC")
+  IF arg1$ = "" THEN
+    tira_Cancel
+    parse_BLUE32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("BLU32", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_BLUE32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+
+  tiraOp TC_AND, resVar$, arg1$, "255"
+
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_BLUE32$ = scratchName$
+
+END FUNCTION ' parse_BLUE32$
+
+''''''''''''''''''''''''
+''''''''''''''''''''''''
+FUNCTION parse_CIRCLE (startIdx)
+
+  DIM endIdx AS LONG
+  DIM hasStep AS LONG
+  DIM tokIdx AS LONG
+  DIM comma1 AS LONG
+  DIM comma2 AS LONG
+  DIM comma3 AS LONG
+  DIM comma4 AS LONG
+  DIM comma5 AS LONG
+  DIM cComma AS LONG
+  DIM cStart AS LONG
+  DIM cEnd AS LONG
+  DIM rEnd AS LONG
+  DIM colEnd AS LONG
+  DIM radStart AS LONG
+  DIM radEnd AS LONG
+  DIM aspStart AS LONG
+  DIM aspEnd AS LONG
+  DIM xVar$
+  DIM yVar$
+  DIM radVar$
+  DIM colVar$
+  DIM tmpVar$
+
+  endIdx = lineTokenCount - 1
+
+  IF compileHasGraphics = 0 THEN
+    throwCompilerError "CIRCLE REQUIRES #GRAPHICS", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  tokIdx = startIdx + 1
+
+  IF tokIdx > endIdx THEN
+    throwCompilerError "EXPECTED ( AFTER CIRCLE", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  hasStep = 0
+  IF lineTokenVals(tokIdx) = TOK_STEP THEN
+    hasStep = 1
+    tokIdx = tokIdx + 1
+    IF tokIdx > endIdx THEN
+      throwCompilerError "EXPECTED ( AFTER STEP", ASIS, 0
+      EXIT FUNCTION
+    END IF
+  END IF
+
+  IF lineTokenVals(tokIdx) <> 256 + ASC("(") THEN
+    throwCompilerError "EXPECTED ( AFTER CIRCLE", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  comma1 = findComma(tokIdx, endIdx)
+  comma2 = 0
+  comma3 = 0
+  comma4 = 0
+  comma5 = 0
+
+  IF comma1 > 0 THEN comma2 = findComma(comma1 + 1, endIdx)
+  IF comma2 > 0 THEN comma3 = findComma(comma2 + 1, endIdx)
+  IF comma3 > 0 THEN comma4 = findComma(comma3 + 1, endIdx)
+  IF comma4 > 0 THEN comma5 = findComma(comma4 + 1, endIdx)
+
+  IF comma1 = 0 THEN
+    throwCompilerError "CIRCLE MISSING RADIUS", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  cComma = retCoordinateBoundaries(tokIdx, comma1 - 1)
+  IF cComma = 0 THEN
+    throwCompilerError "CIRCLE MISSING X, Y", ASIS, 0
+    EXIT FUNCTION
+  END IF
+  cStart = returnedData2
+  cEnd = returnedData3
+
+  tira_Start
+
+  xVar$ = tiraParseExpressionInt$(cStart, cComma - 1, ALIM, "COORDINATE MUST BE NUMERIC")
+  IF xVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  yVar$ = tiraParseExpressionInt$(cComma + 1, cEnd, ALIM, "COORDINATE MUST BE NUMERIC")
+  IF yVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  IF hasStep = 1 THEN
+    tiraOp TC_ADD, xVar$, xVar$, "!G_GFX_CUR_X_VAL"
+    tiraOp TC_ADD, yVar$, yVar$, "!G_GFX_CUR_Y_VAL"
+  END IF
+
+  rEnd = endIdx
+  IF comma2 > 0 THEN rEnd = comma2 - 1
+
+  IF comma1 + 1 > rEnd THEN
+    throwCompilerErrorAndCancelTira "CIRCLE MISSING RADIUS", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  radVar$ = tiraParseExpressionInt$(comma1 + 1, rEnd, ALIM, "RADIUS MUST BE NUMERIC")
+  IF radVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  IF comma2 > 0 THEN
+    colEnd = endIdx
+    IF comma3 > 0 THEN colEnd = comma3 - 1
+    IF comma2 + 1 > colEnd THEN
+      colVar$ = "!G_GFX_FG_VAL"
+    ELSE
+      colVar$ = tiraParseExpressionInt$(comma2 + 1, colEnd, ALIM, "COLOR MUST BE NUMERIC")
+      IF colVar$ = "" THEN
+        tira_Cancel
+        EXIT FUNCTION
+      END IF
+    END IF
+  ELSE
+    colVar$ = "!G_GFX_FG_VAL"
+  END IF
+
+  IF comma3 > 0 THEN
+    radStart = comma3 + 1
+    radEnd = endIdx
+    IF comma4 > 0 THEN radEnd = comma4 - 1
+    IF radStart <= radEnd THEN
+      IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+      tmpVar$ = tiraParseExpressionNumeric$(radStart, radEnd, ALIM, "RADIAN MUST BE NUMERIC")
+      IF tmpVar$ = "" THEN
+        tira_Cancel
+        EXIT FUNCTION
+      END IF
+    END IF
+  END IF
+
+  IF comma4 > 0 THEN
+    radStart = comma4 + 1
+    radEnd = endIdx
+    IF comma5 > 0 THEN radEnd = comma5 - 1
+    IF radStart <= radEnd THEN
+      IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+      tmpVar$ = tiraParseExpressionNumeric$(radStart, radEnd, ALIM, "RADIAN MUST BE NUMERIC")
+      IF tmpVar$ = "" THEN
+        tira_Cancel
+        EXIT FUNCTION
+      END IF
+    END IF
+  END IF
+
+  IF comma5 > 0 THEN
+    aspStart = comma5 + 1
+    aspEnd = endIdx
+    IF aspStart <= aspEnd THEN
+      IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+      tmpVar$ = tiraParseExpressionNumeric$(aspStart, aspEnd, ALIM, "ASPECT MUST BE NUMERIC")
+      IF tmpVar$ = "" THEN
+        tira_Cancel
+        EXIT FUNCTION
+      END IF
+    END IF
+  END IF
+
+  tiraCall "RT_CIRCLE", 4, xVar$ + ", " + yVar$ + ", " + radVar$ + ", " + colVar$
+
+  tiraTriggerAutoDisplay
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_CIRCLE = 1
+
+END FUNCTION ' parse_CIRCLE
+
+''''''''''''''''''''''''
+FUNCTION parse_CLIPBOARD_Assign (startIdx)
+
+  DIM endIdx AS LONG
+  DIM argVar$
+
+  endIdx = lineTokenCount - 1
+
+  IF startIdx + 1 > endIdx THEN
+    throwCompilerError "EXPECTED = AFTER _CLIPBOARD$", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  IF lineTokenVals(startIdx + 1) <> 256 + ASC("=") THEN
+    throwCompilerError "EXPECTED = AFTER _CLIPBOARD$", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_STRING
+  argVar$ = tiraParseExpression$(startIdx + 2, endIdx, ALIM)
+  IF argVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  IF exprIs.DataType <> TYPE_STRING THEN
+    throwCompilerErrorAndCancelTira "_CLIPBOARD$ ASSIGN REQUIRES STRING", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  tiraCall "RT_SET_CLIPBOARD", 1, argVar$
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_CLIPBOARD_Assign = 1
+
+END FUNCTION ' parse_CLIPBOARD_Assign
+
+''''''''''''''''''''''''
+FUNCTION parse_CLIPBOARD_FUNC$ (startIdx, endIdx, allowImplicit)
+
+  DIM scratchName$
+  DIM descPtr$
+
+  IF startIdx <> endIdx THEN
+    throwCompilerError "MALFORMED _CLIPBOARD$", ASIS, 0
+    parse_CLIPBOARD_FUNC$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  scratchName$ = tiraResolveHoistVar$("CLIP", "_DESC$")
+  IF scratchName$ = "" THEN
+    parse_CLIPBOARD_FUNC$ = ""
+    EXIT FUNCTION
+  END IF
+
+  ' Allocate a local descriptor wrapper and push its address explicitly into the arguments
+  ' so the Runtime Helper can physically write the required data pointers back into it
+  descPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign descPtr$, scratchName$
+
+  tiraCall "RT_GET_CLIPBOARD", 1, descPtr$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_STRING
+  exprIs.IsTemp = 1
+  parse_CLIPBOARD_FUNC$ = scratchName$
+
+END FUNCTION ' parse_CLIPBOARD_FUNC$
+
+''''''''''''''''''''''''
+FUNCTION parse_CLOSE (startIdx)
+
+  DIM endIdx AS LONG
+  DIM commaIdx AS LONG
+  DIM itemStart AS LONG
+  DIM itemEnd AS LONG
+  DIM fileNumStart AS LONG
+  DIM fileNumVar$
+  DIM baseArr$
+  DIM iterVar$
+  DIM loopTop$
+  DIM loopEnd$
+  DIM slotAddr$
+  DIM handleVar$
+  DIM skipClose$
+  DIM skipClose2$
+
+  endIdx = lineTokenCount - 1
+
+  tira_Start
+
+  baseArr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADDRESS_OF, baseArr$, "!G_LAYOUT_FILE_HANDLES_ARR", ""
+
+  IF endIdx < startIdx + 1 THEN
+    ' Close all files iteratively (1 to 255)
+    iterVar$ = tiraDimVar$("T", TYPE_LONG)
+    tiraAssign iterVar$, "1"
+
+    loopTop$ = tiraLabelCreateNew$("CLOSE_LOOP")
+    loopEnd$ = tiraLabelCreateNew$("CLOSE_END")
+
+    tiraLabel loopTop$
+    tiraJmpCond "JG", iterVar$, "255", loopEnd$
+
+    slotAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraLeaSIB slotAddr$, baseArr$, iterVar$, "8"
+
+    handleVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraNew TC_READ_MEM, handleVar$ + ", " + slotAddr$
+
+    skipClose$ = tiraLabelCreateNew$("SKIP_CLOSE")
+    tiraJmpCond "JE", handleVar$, "0", skipClose$
+    tiraJmpCond "JE", handleVar$, "-1", skipClose$ ' INVALID_HANDLE_VALUE (-1)
+
+    tiraCall "IAT_CLOSEHANDLE", 1, handleVar$
+    tiraWriteMem slotAddr$, "0", "8"
+
+    tiraLabel skipClose$
+    tiraOp TC_ADD, iterVar$, iterVar$, "1"
+    tiraJmp loopTop$
+
+    tiraLabel loopEnd$
+  ELSE
+    ' Close specifically identified files mapped by comma boundaries
+    itemStart = startIdx + 1
+    DO WHILE itemStart <= endIdx
+      itemEnd = endIdx
+      commaIdx = findComma(itemStart, endIdx)
+      IF commaIdx > 0 THEN itemEnd = commaIdx - 1
+
+      fileNumStart = itemStart
+
+      ' Strip the # symbol so the expression evaluates properly
+      IF lineTokens$(fileNumStart) = "#" THEN
+        fileNumStart = fileNumStart + 1
+      ELSE
+        IF LEFT$(lineTokens$(fileNumStart), 1) = "#" THEN
+          lineTokens$(fileNumStart) = MID$(lineTokens$(fileNumStart), 2)
+        END IF
+      END IF
+
+      fileNumVar$ = tiraParseExpressionInt$(fileNumStart, itemEnd, ALIM, "FILENUM MUST BE NUMERIC")
+      IF fileNumVar$ = "" THEN
+        tira_Cancel
+        EXIT FUNCTION
+      END IF
+
+      slotAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+      tiraLeaSIB slotAddr$, baseArr$, fileNumVar$, "8"
+
+      handleVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+      tiraNew TC_READ_MEM, handleVar$ + ", " + slotAddr$
+
+      skipClose2$ = tiraLabelCreateNew$("SKIP_CLOSE")
+      tiraJmpCond "JE", handleVar$, "0", skipClose2$
+      tiraJmpCond "JE", handleVar$, "-1", skipClose2$
+
+      tiraCall "IAT_CLOSEHANDLE", 1, handleVar$
+      tiraWriteMem slotAddr$, "0", "8"
+
+      tiraLabel skipClose2$
+
+      itemStart = itemEnd + 2
+    LOOP
+  END IF
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_CLOSE = 1
+
+END FUNCTION ' parse_CLOSE
+
+''''''''''''''''''''''''
+FUNCTION parse_COS$ (startIdx, endIdx, allowImplicit)
+
+  DIM arg1$
+  DIM scratchName$
+  DIM resVar$
+  DIM singleRes$
+  DIM argFloat$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "COS", 3) = 0 THEN
+    parse_COS$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+
+  arg1$ = tiraParseExpressionNumeric$(startIdx + 2, endIdx - 1, allowImplicit, "INTRINSIC REQUIRES NUMERIC")
+  IF arg1$ = "" THEN
+    parse_COS$ = ""
+    EXIT FUNCTION
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("COS", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_COS$ = ""
+    EXIT FUNCTION
+  END IF
+
+  ' Explicitly override the integer prefix rule to safely route as float
+  ff = resolveSymbol(scratchName$)
+  IF ff = 1 THEN symbols(returnedData2).DataType = TYPE_SINGLE
+
+  resVar$ = tiraDimVar$("T", TYPE_DOUBLE)
+
+  ' Coerce the argument to a double for the external IAT function
+  IF exprIs.DataType <> TYPE_DOUBLE THEN
+    argFloat$ = tiraDimVar$("T", TYPE_DOUBLE)
+    tiraAssign argFloat$, arg1$
+    arg1$ = argFloat$
+  END IF
+
+  tiraCall "IAT_COS", 1, arg1$
+  tiraNew TC_GET_RET, resVar$
+
+  singleRes$ = tiraDimVar$("T", TYPE_SINGLE)
+  tiraOp TC_CAST, singleRes$, resVar$, LTRIM$(STR$(TYPE_SINGLE))
+
+  tiraAssign scratchName$, singleRes$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_SINGLE
+  exprIs.IsTemp = 1
+  parse_COS$ = scratchName$
+
+END FUNCTION ' parse_COS$
+
+''''''''''''''''''''''''
+FUNCTION parse_CVS$ (startIdx, endIdx, allowImplicit)
+
+  DIM arg1$
+  DIM scratchName$
+  DIM resVar$
+  DIM dataPtr$
+  DIM strLen$
+  DIM validCvsLbl$
+  DIM errStr$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "CVS", 3) = 0 THEN
+    parse_CVS$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_STRING
+
+  arg1$ = tiraParseExpression$(startIdx + 2, endIdx - 1, allowImplicit)
+  IF arg1$ = "" THEN
+    tira_Cancel
+    parse_CVS$ = ""
+    EXIT FUNCTION
+  END IF
+
+  IF exprIs.DataType <> TYPE_STRING THEN
+    throwCompilerErrorAndCancelTira "INTRINSIC REQUIRES STRING", ASIS, 0
+    parse_CVS$ = ""
+    EXIT FUNCTION
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("CVS", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_CVS$ = ""
+    EXIT FUNCTION
+  END IF
+
+  ' Force the hoist variable to cleanly inherit the explicit SINGLE precision type
+  ff = resolveSymbol(scratchName$)
+  IF ff = 1 THEN symbols(returnedData2).DataType = TYPE_SINGLE
+
+  resVar$ = tiraDimVar$("T", TYPE_SINGLE)
+
+  dataPtr$ = tiraGetStringData$(arg1$)
+  strLen$ = tiraGetStringLen$(arg1$)
+
+  validCvsLbl$ = tiraLabelCreateNew$("VALID_CVS")
+
+  tiraJmpCond "JGE", strLen$, "4", validCvsLbl$
+
+  errStr$ = CHR$(34) + "PROGRAM TERMINATED: ILLEGAL FUNCTION CALL IN CVS() ON LINE " + retLineNumberStr$ + CHR$(34)
+  tiraCall "RT_PRINT_STR", 1, errStr$
+  tiraCall "RT_CRLF", 0, ""
+  tiraJmp "@END_PROGRAM"
+
+  tiraLabel validCvsLbl$
+
+  tiraNew TC_READ_MEM, resVar$ + ", " + dataPtr$
+
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_SINGLE
+  exprIs.IsTemp = 1
+  parse_CVS$ = scratchName$
+
+END FUNCTION ' parse_CVS$
+
+''''''''''''''''''''''''
+FUNCTION parse_DISPLAY_Core (startIdx, isDisplayI)
+
+  DIM endIdx AS LONG
+
+  endIdx = lineTokenCount - 1
+
+  IF isDisplayI = 1 THEN cmdName$ = "_DISPLAYI" ELSE cmdName$ = "_DISPLAY"
+
+  IF compileHasGraphics = 0 THEN
+    throwCompilerError cmdName$ + " REQUIRES #GRAPHICS", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  ff = verifyNoExtraTokens(endIdx, startIdx, cmdName$)
+  IF ff = 0 THEN EXIT FUNCTION
+
+  tira_Start
+
+  tiraAssign "!G_GFX_AUTODISPLAY_FLAG", "0"
+
+  IF isDisplayI = 0 THEN
+    tiraCall "RT_SWAP_BUFFERS", 0, ""
+  ELSE
+    tiraInjectPendingDisplayFlush
+  END IF
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_DISPLAY_Core = 1
+
+END FUNCTION ' parse_DISPLAY_Core
+
+''''''''''''''''''''''''
+FUNCTION parse_EOF$ (startIdx, endIdx, allowImplicit)
+
+  DIM fileNumStart AS LONG
+  DIM fileNumVar$
+  DIM scratchName$
+  DIM baseArr$
+  DIM slotAddr$
+  DIM handleVar$
+  DIM resVar$
+  DIM sizeVar$
+  DIM posVar$
+  DIM lblEof$
+  DIM lblEnd$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "EOF", 3) = 0 THEN
+    parse_EOF$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  fileNumStart = startIdx + 2
+
+  ' Strip the # symbol so the expression evaluates properly
+  IF lineTokens$(fileNumStart) = "#" THEN
+    fileNumStart = fileNumStart + 1
+  ELSE
+    IF LEFT$(lineTokens$(fileNumStart), 1) = "#" THEN
+      lineTokens$(fileNumStart) = MID$(lineTokens$(fileNumStart), 2)
+    END IF
+  END IF
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+  fileNumVar$ = tiraParseExpressionInt$(fileNumStart, endIdx - 1, allowImplicit, "FILENUM MUST BE NUMERIC")
+  IF fileNumVar$ = "" THEN
+    tira_Cancel
+    parse_EOF$ = ""
+    EXIT FUNCTION
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("EOF", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_EOF$ = ""
+    EXIT FUNCTION
+  END IF
+
+  baseArr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADDRESS_OF, baseArr$, "!G_LAYOUT_FILE_HANDLES_ARR", ""
+
+  slotAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraLeaSIB slotAddr$, baseArr$, fileNumVar$, "8"
+
+  handleVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_READ_MEM, handleVar$ + ", " + slotAddr$
+
+  ' Request the overall file size cleanly from the Windows API
+  tiraCall "IAT_GETFILESIZE", 2, handleVar$ + ", 0"
+  sizeVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_GET_RET, sizeVar$
+
+  ' Set file pointer with a movement delta of 0 and FILE_CURRENT (1) to retrieve the actual OS position
+  tiraCall "IAT_SETFILEPOINTER", 4, handleVar$ + ", 0, 0, 1"
+  posVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_GET_RET, posVar$
+
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign resVar$, "0"
+
+  lblEof$ = tiraLabelCreateNew$("EOF_TRUE")
+  lblEnd$ = tiraLabelCreateNew$("EOF_END")
+
+  ' Check if the current pointer position is equal to or exceeds the overall file size
+  tiraJmpCond "JGE", posVar$, sizeVar$, lblEof$
+  tiraJmp lblEnd$
+
+  tiraLabel lblEof$
+  tiraAssign resVar$, "-1"
+
+  tiraLabel lblEnd$
+
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_EOF$ = scratchName$
+
+END FUNCTION ' parse_EOF$
+
+''''''''''''''''''''''''
+FUNCTION parse_FILEEXISTS$ (startIdx, endIdx, allowImplicit)
+
+  DIM arg1$
+  DIM scratchName$
+  DIM resVar$
+  DIM strDataPtr$
+  DIM attrVal$
+  DIM isDir$
+  DIM skipDirLbl$
+  DIM jmpDoneLbl$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "_FILEEXISTS", 3) = 0 THEN
+    parse_FILEEXISTS$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_STRING
+
+  arg1$ = tiraParseExpression$(startIdx + 2, endIdx - 1, allowImplicit)
+  IF arg1$ = "" THEN
+    tira_Cancel
+    parse_FILEEXISTS$ = ""
+    EXIT FUNCTION
+  END IF
+
+  IF exprIs.DataType <> TYPE_STRING THEN
+    throwCompilerErrorAndCancelTira "_FILEEXISTS REQUIRES STRING ARGUMENT", ASIS, 0
+    parse_FILEEXISTS$ = ""
+    EXIT FUNCTION
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("FEXISTS", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_FILEEXISTS$ = ""
+    EXIT FUNCTION
+  END IF
+
+  strDataPtr$ = tiraGetStringData$(arg1$)
+
+  tiraCall "IAT_GETFILEATTRIBUTESA", 1, strDataPtr$
+  attrVal$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_GET_RET, attrVal$
+
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign resVar$, "0"
+
+  skipDirLbl$ = tiraLabelCreateNew$("FEXISTS_SKIP")
+  jmpDoneLbl$ = tiraLabelCreateNew$("FEXISTS_DONE")
+
+  ' If returned -1 (INVALID_FILE_ATTRIBUTES), file does not exist
+  tiraJmpCond "JE", attrVal$, "-1", jmpDoneLbl$
+
+  ' Check if it is a directory (FILE_ATTRIBUTE_DIRECTORY = 16)
+  isDir$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_AND, isDir$, attrVal$, "16"
+  tiraJmpCond "JNE", isDir$, "0", skipDirLbl$
+
+  ' File exists and is not a directory
+  tiraAssign resVar$, "-1"
+  tiraJmp jmpDoneLbl$
+
+  tiraLabel skipDirLbl$
+
+  tiraLabel jmpDoneLbl$
+
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_FILEEXISTS$ = scratchName$
+
+END FUNCTION ' parse_FILEEXISTS$
+
+''''''''''''''''''''''''
+FUNCTION parse_FREEFILE$ (startIdx, endIdx, allowImplicit)
+
+  DIM scratchName$
+  DIM idxVar$
+  DIM baseArr$
+  DIM loopTop$
+  DIM loopDone$
+  DIM slotAddr$
+  DIM handleVar$
+  DIM skipLimitLbl$
+
+  IF startIdx <> endIdx THEN
+    throwCompilerError "MALFORMED FREEFILE", ASIS, 0
+    parse_FREEFILE$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  scratchName$ = tiraResolveHoistVar$("FREEFILE", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_FREEFILE$ = ""
+    EXIT FUNCTION
+  END IF
+
+  idxVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign idxVar$, "1"
+
+  baseArr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADDRESS_OF, baseArr$, "!G_LAYOUT_FILE_HANDLES_ARR", ""
+
+  loopTop$ = tiraLabelCreateNew$("FF_TOP")
+  loopDone$ = tiraLabelCreateNew$("FF_DONE")
+
+  tiraLabel loopTop$
+  tiraJmpCond "JG", idxVar$, "255", loopDone$
+
+  slotAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraLeaSIB slotAddr$, baseArr$, idxVar$, "8"
+
+  handleVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_READ_MEM, handleVar$ + ", " + slotAddr$
+
+  ' If the handle is 0, this slot is completely unused
+  tiraJmpCond "JE", handleVar$, "0", loopDone$
+
+  tiraOp TC_ADD, idxVar$, idxVar$, "1"
+  tiraJmp loopTop$
+
+  tiraLabel loopDone$
+
+  ' Gracefully zero out the return variable if we exceeded 255 (no free files available)
+  skipLimitLbl$ = tiraLabelCreateNew$("FF_LIMIT")
+  tiraJmpCond "JLE", idxVar$, "255", skipLimitLbl$
+  tiraAssign idxVar$, "0"
+  tiraLabel skipLimitLbl$
+
+  tiraAssign scratchName$, idxVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_FREEFILE$ = scratchName$
+
+END FUNCTION ' parse_FREEFILE$
+
+''''''''''''''''''''''''
+FUNCTION parse_GET (startIdx)
+
+  DIM dashIdx AS LONG
+  DIM isFileIO AS LONG
+  DIM cComma AS LONG
+  DIM cStart1 AS LONG
+  DIM cEnd1 AS LONG
+  DIM commaIdx AS LONG
+  DIM cComma2 AS LONG
+  DIM cStart2 AS LONG
+  DIM cEnd2 AS LONG
+  DIM tokIdx AS LONG
+  DIM closeParen AS LONG
+  DIM vIdx AS LONG
+  DIM elemSize AS LONG
+  DIM statElems AS LONG
+  DIM endIdx AS LONG
+  DIM indicesStr$
+  DIM numParsedIndices AS LONG
+
+  endIdx = lineTokenCount - 1
+
+  dashIdx = 0
+  ff = findNextTokenAtDepth0(startIdx + 1, endIdx, 256 + ASC("-"))
+  IF ff = 1 THEN
+    dashIdx = returnedData2
+  END IF
+
+  isFileIO = 0
+  IF dashIdx = 0 THEN
+    isFileIO = 1
+  END IF
+
+  IF isFileIO = 1 THEN
+    parse_GET = parse_GET_File(startIdx, endIdx)
+    EXIT FUNCTION
+  END IF
+
+  IF compileHasGraphics = 0 THEN
+    throwCompilerError "GRAPHICS GET REQUIRES #GRAPHICS", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  cComma = retCoordinateBoundaries(startIdx + 1, dashIdx - 1)
+  IF cComma = 0 THEN
+    throwCompilerError "GET MISSING X1, Y1", ASIS, 0
+    EXIT FUNCTION
+  END IF
+  cStart1 = returnedData2
+  cEnd1 = returnedData3
+
+  tira_Start
+
+  x1$ = tiraParseExpressionInt$(cStart1, cComma - 1, ALIM, "COORDINATE MUST BE NUMERIC")
+  IF x1$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  y1$ = tiraParseExpressionInt$(cComma + 1, cEnd1, ALIM, "COORDINATE MUST BE NUMERIC")
+  IF y1$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  commaIdx = findComma(dashIdx + 1, endIdx)
+
+  IF commaIdx = 0 THEN
+    throwCompilerErrorAndCancelTira "GET MISSING ARRAY VARIABLE", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  cComma2 = retCoordinateBoundaries(dashIdx + 1, commaIdx - 1)
+  IF cComma2 = 0 THEN
+    throwCompilerErrorAndCancelTira "GET MISSING X2, Y2", ASIS, 0
+    EXIT FUNCTION
+  END IF
+  cStart2 = returnedData2
+  cEnd2 = returnedData3
+
+  x2$ = tiraParseExpressionInt$(cStart2, cComma2 - 1, ALIM, "COORDINATE MUST BE NUMERIC")
+  IF x2$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  y2$ = tiraParseExpressionInt$(cComma2 + 1, cEnd2, ALIM, "COORDINATE MUST BE NUMERIC")
+  IF y2$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  tokIdx = commaIdx + 1
+  vTok$ = lineTokens$(tokIdx)
+  vName$ = UCASE$(vTok$)
+  ff = resolveSymbol(vName$)
+  IF ff = 0 THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+  vIdx = returnedData2
+
+  IF symbols(vIdx).IsExplicit = DECL_IMPLICIT THEN
+    symbols(vIdx).IsExplicit = DECL_QUIET
+  END IF
+
+  IF symbols(vIdx).IsArray = 0 THEN
+    throwCompilerErrorAndCancelTira "GET TARGET MUST BE AN ARRAY", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  indicesStr$ = ""
+  numParsedIndices = 0
+
+  tokIdx = tokIdx + 1
+  IF tokIdx <= endIdx THEN
+    IF lineTokenVals(tokIdx) = 256 + ASC("(") THEN
+      indicesStr$ = tiraParseArrayArgs$(tokIdx, endIdx, 0)
+      IF indicesStr$ = "" AND compileError = 1 THEN EXIT FUNCTION
+      closeParen = returnedData2
+      numParsedIndices = returnedData3
+    END IF
+  END IF
+
+  IF symbols(vIdx).NumDimensions > 0 AND numParsedIndices > 0 AND numParsedIndices <> symbols(vIdx).NumDimensions THEN
+    throwCompilerError "WRONG NUMBER OF DIMENSIONS", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  ptr$ = tiraFrontendCalcAddress$(vName$, indicesStr$, 0)
+  IF ptr$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  elemSize = retElementByteSize(vIdx)
+
+  descAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADDRESS_OF, descAddr$, "#" + LTRIM$(STR$(vIdx)), ""
+
+  numDims$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_READ_MEM_OFFSET, numDims$ + ", " + descAddr$ + ", 12"
+
+  totalElems$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign totalElems$, "1"
+
+  dimItr$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign dimItr$, "0"
+  lblDimTop$ = tiraLabelCreateNew$("DIM_TOP")
+  lblDimDone$ = tiraLabelCreateNew$("DIM_DONE")
+
+  tiraLabel lblDimTop$
+  tiraJmpCond "JGE", dimItr$, numDims$, lblDimDone$
+
+  offsetVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_MUL, offsetVar$, dimItr$, "8"
+  tiraOp TC_ADD, offsetVar$, offsetVar$, "16"
+
+  dimLimitAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, dimLimitAddr$, descAddr$, offsetVar$
+
+  dimLimit$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_READ_MEM, dimLimit$ + ", " + dimLimitAddr$
+
+  tiraOp TC_MUL, totalElems$, totalElems$, dimLimit$
+  tiraOp TC_ADD, dimItr$, dimItr$, "1"
+  tiraJmp lblDimTop$
+
+  tiraLabel lblDimDone$
+
+  byteSize$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_MUL, byteSize$, totalElems$, LTRIM$(RTRIM$(STR$(elemSize)))
+
+  baseAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_READ_MEM, baseAddr$ + ", " + descAddr$
+
+  endPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, endPtr$, baseAddr$, byteSize$
+
+  tiraCall "RT_GET", 6, x1$ + ", " + y1$ + ", " + x2$ + ", " + y2$ + ", " + ptr$ + ", " + endPtr$
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_GET = 1
+
+END FUNCTION ' parse_GET
+
+''''''''''''''''''''''''
+FUNCTION parse_GET_File (startIdx, endIdx)
+
+  DIM comma1 AS LONG
+  DIM comma2 AS LONG
+  DIM targetStart AS LONG
+  DIM closeParen AS LONG
+  DIM tokIdx AS LONG
+  DIM vTok$, vName$
+  DIM vIdx AS LONG
+  DIM dt AS LONG
+  DIM elemSize AS LONG
+  DIM fixedLen AS LONG
+  DIM indicesStr$
+  DIM numParsedIndices AS LONG
+
+  DIM hasArrayIndices AS LONG
+
+  tokIdx = startIdx + 1
+  IF lineTokens$(tokIdx) = "#" THEN
+    tokIdx = tokIdx + 1
+  ELSE
+    IF LEFT$(lineTokens$(tokIdx), 1) = "#" THEN
+      lineTokens$(tokIdx) = MID$(lineTokens$(tokIdx), 2)
+    END IF
+  END IF
+
+  comma1 = findComma(tokIdx, endIdx)
+  IF comma1 = 0 THEN
+    throwCompilerError "GET MISSING COMMA", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  comma2 = findComma(comma1 + 1, endIdx)
+  IF comma2 = 0 THEN
+    targetStart = comma1 + 1
+  ELSE
+    targetStart = comma2 + 1
+  END IF
+
+  IF targetStart > endIdx THEN
+    throwCompilerError "GET MISSING TARGET VARIABLE", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  vTok$ = lineTokens$(targetStart)
+  vName$ = UCASE$(vTok$)
+  ff = resolveSymbol(vName$)
+  IF ff = 0 THEN EXIT FUNCTION
+  vIdx = returnedData2
+
+  IF symbols(vIdx).IsExplicit = DECL_IMPLICIT THEN
+    symbols(vIdx).IsExplicit = DECL_QUIET
+  END IF
+
+  tira_Start
+
+  fileNumVar$ = tiraParseExpressionInt$(tokIdx, comma1 - 1, ALIM, "FILE NUM MUST BE NUMERIC")
+  IF fileNumVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  indicesStr$ = ""
+  numParsedIndices = 0
+  hasArrayIndices = 0
+
+  IF targetStart < endIdx THEN
+    IF lineTokenVals(targetStart + 1) = 256 + ASC("(") THEN
+      hasArrayIndices = 1
+      indicesStr$ = tiraParseArrayArgs$(targetStart + 1, endIdx, ALIM)
+      IF indicesStr$ = "" AND compileError = 1 THEN EXIT FUNCTION
+      closeParen = returnedData2
+      numParsedIndices = returnedData3
+    END IF
+  END IF
+
+  IF symbols(vIdx).NumDimensions > 0 AND numParsedIndices > 0 AND numParsedIndices <> symbols(vIdx).NumDimensions THEN
+    throwCompilerError "WRONG NUMBER OF DIMENSIONS", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  baseArr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADDRESS_OF, baseArr$, "!G_LAYOUT_FILE_HANDLES_ARR", ""
+
+  slotAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraLeaSIB slotAddr$, baseArr$, fileNumVar$, "8"
+
+  handleVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_READ_MEM, handleVar$ + ", " + slotAddr$
+
+  skipFileIOLbl$ = tiraLabelCreateNew$("SKIP_FILE_IO")
+
+  tiraJmpCond "JE", handleVar$, "0", skipFileIOLbl$
+  tiraJmpCond "JE", handleVar$, "-1", skipFileIOLbl$
+
+  ptr$ = tiraFrontendCalcAddress$(vName$, indicesStr$, 0)
+  IF ptr$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  dt = symbols(vIdx).DataType
+  elemSize = retElementByteSize(vIdx)
+  fixedLen = retFixedStringLength(vIdx)
+
+  dataSize$ = tiraDimVar$("T", TYPE_LONG)
+  dataPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+
+  IF dt = TYPE_STRING AND fixedLen = 0 THEN
+    descPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+
+    IF symbols(vIdx).IsArray > 0 THEN
+      tiraNew TC_READ_MEM, descPtr$ + ", " + ptr$
+    ELSE
+      tiraAssign descPtr$, ptr$
+    END IF
+
+    tiraJmpCond "JE", descPtr$, "0", skipFileIOLbl$
+
+    tiraAssign dataSize$, tiraGetStringLen$(descPtr$)
+    tiraAssign dataPtr$, tiraGetStringData$(descPtr$)
+
+    tiraJmpCond "JLE", dataSize$, "0", skipFileIOLbl$
+    tiraJmpCond "JE", dataPtr$, "0", skipFileIOLbl$
+
+  ELSE
+    IF dt = TYPE_STRING AND fixedLen > 0 THEN
+      tiraAssign dataSize$, LTRIM$(STR$(fixedLen))
+
+      IF symbols(vIdx).IsArray > 0 THEN
+        tiraAssign dataPtr$, ptr$
+      ELSE
+        descPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+        tiraAssign descPtr$, ptr$
+
+        tiraJmpCond "JE", descPtr$, "0", skipFileIOLbl$
+
+        tiraAssign dataPtr$, tiraGetStringData$(descPtr$)
+        tiraJmpCond "JE", dataPtr$, "0", skipFileIOLbl$
+      END IF
+    ELSE
+      tiraAssign dataSize$, LTRIM$(STR$(elemSize))
+      tiraAssign dataPtr$, ptr$
+
+      tiraJmpCond "JLE", dataSize$, "0", skipFileIOLbl$
+    END IF
+  END IF
+
+  numWrt$ = tiraDimVar$("T", TYPE_LONG)
+  numWrtPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADDRESS_OF, numWrtPtr$, numWrt$, ""
+
+  tiraCall "IAT_READFILE", 5, handleVar$ + ", " + dataPtr$ + ", " + dataSize$ + ", " + numWrtPtr$ + ", 0"
+
+  tiraLabel skipFileIOLbl$
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_GET_File = 1
+
+END FUNCTION ' parse_GET_File
+
+''''''''''''''''''''''''
+FUNCTION parse_GREEN32$ (startIdx, endIdx, allowImplicit)
+
+  DIM arg1$
+  DIM scratchName$
+  DIM resVar$
+  DIM shiftVar$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "_GREEN32", 3) = 0 THEN
+    parse_GREEN32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+
+  arg1$ = tiraParseExpressionInt$(startIdx + 2, endIdx - 1, allowImplicit, "_GREEN32 ARG MUST BE NUMERIC")
+  IF arg1$ = "" THEN
+    tira_Cancel
+    parse_GREEN32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("GRN32", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_GREEN32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+  shiftVar$ = tiraDimVar$("T", TYPE_LONG)
+
+  tiraOp TC_SHR, shiftVar$, arg1$, "8"
+  tiraOp TC_AND, resVar$, shiftVar$, "255"
+
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_GREEN32$ = scratchName$
+
+END FUNCTION ' parse_GREEN32$
+
+''''''''''''''''''''''''
+FUNCTION parse_HEX$ (startIdx, endIdx, allowImplicit)
+
+  DIM arg1$
+  DIM argDataType AS LONG
+  DIM scratchName$
+  DIM basePtr$
+  DIM ptr$
+  DIM loopTop$
+  DIM digit$
+  DIM charVar$
+  DIM skipAlpha$
+  DIM jmpWrite$
+  DIM strLen$
+  DIM endPtr$
+  DIM descPtr$
+  DIM workVar$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "HEX$", 3) = 0 THEN
+    parse_HEX$ = ""
+    EXIT FUNCTION
+  END IF
+
+  ' Sovereign command opens its own compilation block
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+
+  ' The Shunting Yard safely queues argument evaluation inside our pristine TIRA session
+  arg1$ = tiraParseExpressionInt$(startIdx + 2, endIdx - 1, allowImplicit, "HEX$ REQUIRES NUMERIC ARGUMENT")
+  IF arg1$ = "" THEN
+    parse_HEX$ = ""
+    EXIT FUNCTION
+  END IF
+
+  argDataType = exprIs.DataType
+
+  scratchName$ = tiraResolveHoistVar$("HEX", "_DESC$")
+  IF scratchName$ = "" THEN
+    parse_HEX$ = ""
+    EXIT FUNCTION
+  END IF
+
+  ' Copy the evaluated argument into a working variable to prevent mutating user variables
+  workVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign workVar$, arg1$
+
+  basePtr$ = tiraAllocTempMem$("16")
+
+  ptr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, ptr$, basePtr$, "16"
+
+  ' Mask the value to prevent infinite sign-extension loops for negative numbers
+
+  SELECT CASE argDataType
+
+    CASE TYPE_BYTE, TYPE_UBYTE
+      tiraOp TC_AND, workVar$, workVar$, "255"
+    CASE TYPE_INTEGER, TYPE_UINTEGER
+      tiraOp TC_AND, workVar$, workVar$, "65535"
+    CASE TYPE_LONG, TYPE_ULONG
+      tiraOp TC_AND, workVar$, workVar$, "4294967295"
+
+  END SELECT ' argDataType
+
+  loopTop$ = tiraLabelCreateNew$("HEX_LOOP")
+  tiraLabel loopTop$
+
+  digit$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_AND, digit$, workVar$, "15"
+
+  charVar$ = tiraDimVar$("T", TYPE_LONG)
+  skipAlpha$ = tiraLabelCreateNew$("HEX_SKIP_ALPHA")
+
+  tiraJmpCond "JGE", digit$, "10", skipAlpha$
+
+  ' 0-9
+  tiraOp TC_ADD, charVar$, digit$, "48"
+  jmpWrite$ = tiraLabelCreateNew$("HEX_WRITE")
+  tiraJmp jmpWrite$
+
+  tiraLabel skipAlpha$
+
+  ' A-F
+  tiraOp TC_ADD, charVar$, digit$, "55"
+
+  tiraLabel jmpWrite$
+  tiraOp TC_SUB, ptr$, ptr$, "1"
+  tiraWriteMem ptr$, charVar$, "1"
+
+  ' Shr performs a logical shift, injecting zeros into the upper bits.
+  tiraOp TC_SHR, workVar$, workVar$, "4"
+
+  tiraJmpCond "JNE", workVar$, "0", loopTop$
+
+  strLen$ = tiraDimVar$("T", TYPE_LONG)
+  endPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, endPtr$, basePtr$, "16"
+  tiraOp TC_SUB, strLen$, endPtr$, ptr$
+
+  descPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign descPtr$, scratchName$
+  tiraBuildStringDescriptor descPtr$, ptr$, strLen$, "0"
+
+  ' Close the block (NO HEAP RESET, so the string survives for the parent!)
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_STRING
+  exprIs.IsTemp = 1
+  parse_HEX$ = scratchName$
+
+END FUNCTION ' parse_HEX$
+
+''''''''''''''''''''''''
+FUNCTION parse_INSTR$ (startIdx, endIdx, allowImplicit)
+
+  DIM comma1 AS LONG
+  DIM comma2 AS LONG
+  DIM argStart$
+  DIM argStr1$
+  DIM argStr2$
+  DIM scratchName$
+  DIM resVar$
+  DIM str1Len$
+  DIM str1Data$
+  DIM str2Len$
+  DIM str2Data$
+  DIM safeStart$
+  DIM idx$
+  DIM maxIdx$
+  DIM subIdx$
+  DIM addr1$
+  DIM char1$
+  DIM addr2$
+  DIM char2$
+  DIM lblEmptyStr2$
+  DIM lblStartCheck$
+  DIM lblLoopTop$
+  DIM lblLoopDone$
+  DIM lblMatchFound$
+  DIM lblSubTop$
+  DIM lblSubDone$
+  DIM lblSubFail$
+  DIM lblEnd$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "INSTR", 4) = 0 THEN
+    parse_INSTR$ = ""
+    EXIT FUNCTION
+  END IF
+
+  comma1 = findComma(startIdx + 2, endIdx - 1)
+  IF comma1 = 0 THEN
+    throwCompilerError "INSTR REQUIRES 2 OR 3 ARGUMENTS", ASIS, 0
+    parse_INSTR$ = ""
+    EXIT FUNCTION
+  END IF
+
+  comma2 = findComma(comma1 + 1, endIdx - 1)
+
+  tira_Start
+
+  IF comma2 > 0 THEN
+    IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+    argStart$ = tiraParseExpressionInt$(startIdx + 2, comma1 - 1, allowImplicit, "INSTR START MUST BE NUMERIC")
+    IF argStart$ = "" THEN
+      tira_Cancel
+      parse_INSTR$ = ""
+      EXIT FUNCTION
+    END IF
+
+    IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_STRING
+    argStr1$ = tiraParseExpression$(comma1 + 1, comma2 - 1, allowImplicit)
+    IF argStr1$ = "" THEN
+      tira_Cancel
+      parse_INSTR$ = ""
+      EXIT FUNCTION
+    END IF
+    IF exprIs.DataType <> TYPE_STRING THEN
+      throwCompilerErrorAndCancelTira "INSTR ARG 2 MUST BE STRING", ASIS, 0
+      parse_INSTR$ = ""
+      EXIT FUNCTION
+    END IF
+
+    IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_STRING
+    argStr2$ = tiraParseExpression$(comma2 + 1, endIdx - 1, allowImplicit)
+    IF argStr2$ = "" THEN
+      tira_Cancel
+      parse_INSTR$ = ""
+      EXIT FUNCTION
+    END IF
+    IF exprIs.DataType <> TYPE_STRING THEN
+      throwCompilerErrorAndCancelTira "INSTR ARG 3 MUST BE STRING", ASIS, 0
+      parse_INSTR$ = ""
+      EXIT FUNCTION
+    END IF
+  ELSE
+    argStart$ = tiraDimVar$("T", TYPE_LONG)
+    tiraAssign argStart$, "1"
+
+    IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_STRING
+    argStr1$ = tiraParseExpression$(startIdx + 2, comma1 - 1, allowImplicit)
+    IF argStr1$ = "" THEN
+      tira_Cancel
+      parse_INSTR$ = ""
+      EXIT FUNCTION
+    END IF
+    IF exprIs.DataType <> TYPE_STRING THEN
+      throwCompilerErrorAndCancelTira "INSTR ARG 1 MUST BE STRING", ASIS, 0
+      parse_INSTR$ = ""
+      EXIT FUNCTION
+    END IF
+
+    IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_STRING
+    argStr2$ = tiraParseExpression$(comma1 + 1, endIdx - 1, allowImplicit)
+    IF argStr2$ = "" THEN
+      tira_Cancel
+      parse_INSTR$ = ""
+      EXIT FUNCTION
+    END IF
+    IF exprIs.DataType <> TYPE_STRING THEN
+      throwCompilerErrorAndCancelTira "INSTR ARG 2 MUST BE STRING", ASIS, 0
+      parse_INSTR$ = ""
+      EXIT FUNCTION
+    END IF
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("INSTR", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_INSTR$ = ""
+    EXIT FUNCTION
+  END IF
+
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign resVar$, "0"
+
+  str1Len$ = tiraGetStringLen$(argStr1$)
+  str1Data$ = tiraGetStringData$(argStr1$)
+
+  str2Len$ = tiraGetStringLen$(argStr2$)
+  str2Data$ = tiraGetStringData$(argStr2$)
+
+  safeStart$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign safeStart$, argStart$
+  tiraClamp safeStart$, "1", ""
+
+  idx$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_SUB, idx$, safeStart$, "1"
+
+  maxIdx$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_SUB, maxIdx$, str1Len$, str2Len$
+
+  lblEnd$ = tiraLabelCreateNew$("INSTR_END")
+
+  lblEmptyStr2$ = tiraLabelCreateNew$("INSTR_MT2")
+  tiraJmpCond "JG", str2Len$, "0", lblEmptyStr2$
+
+  lblStartCheck$ = tiraLabelCreateNew$("INSTR_CHKSTART")
+  tiraJmpCond "JLE", safeStart$, str1Len$, lblStartCheck$
+  tiraAssign resVar$, "0"
+  tiraJmp lblEnd$
+  tiraLabel lblStartCheck$
+  tiraAssign resVar$, safeStart$
+  tiraJmp lblEnd$
+
+  tiraLabel lblEmptyStr2$
+
+  lblLoopTop$ = tiraLabelCreateNew$("INSTR_TOP")
+  lblLoopDone$ = tiraLabelCreateNew$("INSTR_DONE")
+  lblMatchFound$ = tiraLabelCreateNew$("INSTR_MATCH")
+
+  tiraLabel lblLoopTop$
+  tiraJmpCond "JG", idx$, maxIdx$, lblLoopDone$
+
+  subIdx$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign subIdx$, "0"
+
+  lblSubTop$ = tiraLabelCreateNew$("INSTR_SUBTOP")
+  lblSubDone$ = tiraLabelCreateNew$("INSTR_SUBDONE")
+  lblSubFail$ = tiraLabelCreateNew$("INSTR_SUBFAIL")
+
+  tiraLabel lblSubTop$
+  tiraJmpCond "JGE", subIdx$, str2Len$, lblSubDone$
+
+  addr1$ = tiraDimVar$("T", TYPE_INTEGER64)
+  char1$ = tiraDimVar$("T", TYPE_UBYTE)
+  tiraOp TC_ADD, addr1$, str1Data$, idx$
+  tiraOp TC_ADD, addr1$, addr1$, subIdx$
+  tiraNew TC_READ_MEM, char1$ + ", " + addr1$
+
+  addr2$ = tiraDimVar$("T", TYPE_INTEGER64)
+  char2$ = tiraDimVar$("T", TYPE_UBYTE)
+  tiraOp TC_ADD, addr2$, str2Data$, subIdx$
+  tiraNew TC_READ_MEM, char2$ + ", " + addr2$
+
+  tiraJmpCond "JNE", char1$, char2$, lblSubFail$
+
+  tiraOp TC_ADD, subIdx$, subIdx$, "1"
+  tiraJmp lblSubTop$
+
+  tiraLabel lblSubDone$
+  tiraJmp lblMatchFound$
+
+  tiraLabel lblSubFail$
+  tiraOp TC_ADD, idx$, idx$, "1"
+  tiraJmp lblLoopTop$
+
+  tiraLabel lblMatchFound$
+  tiraOp TC_ADD, resVar$, idx$, "1"
+
+  tiraLabel lblLoopDone$
+  tiraLabel lblEnd$
+
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_INSTR$ = scratchName$
+
+END FUNCTION ' parse_INSTR$
+
+''''''''''''''''''''''''
+FUNCTION parse_KEYCLEAR (startIdx)
+
+  DIM endIdx AS LONG
+  DIM tailPtr$
+  DIM headPtr$
+  DIM headVal$
+
+  endIdx = lineTokenCount - 1
+
+  ff = verifyNoExtraTokens(endIdx, startIdx, "_KEYCLEAR")
+  IF ff = 0 THEN EXIT FUNCTION
+
+  tira_Start
+
+  IF compileHasGraphics = 1 THEN
+    tailPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraOp TC_ADDRESS_OF, tailPtr$, "!G_LAYOUT_KBD_TAIL_VAL", ""
+
+    headPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraOp TC_ADDRESS_OF, headPtr$, "!G_LAYOUT_KBD_HEAD_VAL", ""
+
+    headVal$ = tiraDimVar$("T", TYPE_LONG)
+    tiraNew TC_READ_MEM, headVal$ + ", " + headPtr$
+
+    tiraWriteMem tailPtr$, headVal$, "4"
+  END IF
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_KEYCLEAR = 1
+
+END FUNCTION ' parse_KEYCLEAR
+
+''''''''''''''''''''''''
+FUNCTION parse_KEYHIT$ (startIdx, endIdx, allowImplicit)
+
+  DIM scratchName$
+  DIM headPtr$
+  DIM headVal$
+  DIM tailPtr$
+  DIM tailVal$
+  DIM emptyLbl$
+  DIM bufPtr$
+  DIM charAddr$
+  DIM charVal$
+  DIM jmpDone$
+  DIM keyIdx$
+  DIM keyLoop$
+  DIM keyState$
+  DIM skipKey$
+  DIM mappedKey$
+  DIM nmpSkip$
+  DIM ar1$
+  DIM ar2$
+  DIM ar3$
+  DIM ar4$
+  DIM resVar$
+
+  IF startIdx <> endIdx THEN
+    throwCompilerError "MALFORMED _KEYHIT", ASIS, 0
+    parse_KEYHIT$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  scratchName$ = tiraResolveHoistVar$("KEYHIT", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_KEYHIT$ = ""
+    EXIT FUNCTION
+  END IF
+
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign resVar$, "0"
+
+  IF compileHasGraphics = 1 THEN
+    headPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraOp TC_ADDRESS_OF, headPtr$, "!G_LAYOUT_KBD_HEAD_VAL", ""
+    headVal$ = tiraDimVar$("T", TYPE_LONG)
+    tiraNew TC_READ_MEM, headVal$ + ", " + headPtr$
+
+    tailPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraOp TC_ADDRESS_OF, tailPtr$, "!G_LAYOUT_KBD_TAIL_VAL", ""
+    tailVal$ = tiraDimVar$("T", TYPE_LONG)
+    tiraNew TC_READ_MEM, tailVal$ + ", " + tailPtr$
+
+    emptyLbl$ = tiraLabelCreateNew$("KEYHIT_EMPTY")
+    tiraJmpCond "JE", headVal$, tailVal$, emptyLbl$
+
+    bufPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraOp TC_ADDRESS_OF, bufPtr$, "!G_LAYOUT_KBD_BUF_ARR", ""
+
+    charAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraOp TC_ADD, charAddr$, bufPtr$, tailVal$
+
+    charVal$ = tiraDimVar$("T", TYPE_UBYTE)
+    tiraNew TC_READ_MEM, charVal$ + ", " + charAddr$
+
+    tiraOp TC_ADD, tailVal$, tailVal$, "1"
+    tiraOp TC_AND, tailVal$, tailVal$, "255"
+    tiraWriteMem tailPtr$, tailVal$, "4"
+
+    tiraAssign resVar$, charVal$
+
+    jmpDone$ = tiraLabelCreateNew$("KEYHIT_DONE")
+    tiraJmp jmpDone$
+
+    tiraLabel emptyLbl$
+    tiraAssign resVar$, "0"
+    tiraLabel jmpDone$
+  ELSE
+    keyIdx$ = tiraDimVar$("T", TYPE_LONG)
+    tiraAssign keyIdx$, "8"
+
+    keyLoop$ = tiraLabelCreateNew$("KEYHIT_KLOOP")
+    tiraLabel keyLoop$
+
+    tiraCall "IAT_GETASYNCKEYSTATE", 1, keyIdx$
+    keyState$ = tiraDimVar$("T", TYPE_LONG)
+    tiraNew TC_GET_RET, keyState$
+
+    tiraOp TC_AND, keyState$, keyState$, "32768"
+    skipKey$ = tiraLabelCreateNew$("KEYHIT_SKIP")
+    tiraJmpCond "JE", keyState$, "0", skipKey$
+
+    mappedKey$ = tiraDimVar$("T", TYPE_LONG)
+    tiraAssign mappedKey$, keyIdx$
+
+    nmpSkip$ = tiraLabelCreateNew$("KEYHIT_NMPSKIP")
+    tiraJmpCond "JL", mappedKey$, "96", nmpSkip$
+    tiraJmpCond "JG", mappedKey$, "105", nmpSkip$
+    tiraOp TC_SUB, mappedKey$, mappedKey$, "48"
+    tiraLabel nmpSkip$
+
+    ar1$ = tiraLabelCreateNew$("KEYHIT_AR1")
+    tiraJmpCond "JNE", mappedKey$, "37", ar1$
+    tiraAssign mappedKey$, "52"
+    tiraLabel ar1$
+
+    ar2$ = tiraLabelCreateNew$("KEYHIT_AR2")
+    tiraJmpCond "JNE", mappedKey$, "38", ar2$
+    tiraAssign mappedKey$, "56"
+    tiraLabel ar2$
+
+    ar3$ = tiraLabelCreateNew$("KEYHIT_AR3")
+    tiraJmpCond "JNE", mappedKey$, "39", ar3$
+    tiraAssign mappedKey$, "54"
+    tiraLabel ar3$
+
+    ar4$ = tiraLabelCreateNew$("KEYHIT_AR4")
+    tiraJmpCond "JNE", mappedKey$, "40", ar4$
+    tiraAssign mappedKey$, "50"
+    tiraLabel ar4$
+
+    tiraAssign resVar$, mappedKey$
+    jmpDone$ = tiraLabelCreateNew$("KEYHIT_DONE")
+    tiraJmp jmpDone$
+
+    tiraLabel skipKey$
+    tiraOp TC_ADD, keyIdx$, keyIdx$, "1"
+    tiraJmpCond "JLE", keyIdx$, "255", keyLoop$
+
+    tiraAssign resVar$, "0"
+    tiraLabel jmpDone$
+  END IF
+
+  tiraAssign scratchName$, resVar$
+
+  tiraInjectPendingDisplayFlush
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_KEYHIT$ = scratchName$
+
+END FUNCTION ' parse_KEYHIT$
+
+''''''''''''''''''''''''
+FUNCTION parse_KILL (startIdx)
+
+  DIM endIdx AS LONG
+
+  endIdx = lineTokenCount - 1
+
+  IF endIdx < startIdx + 1 THEN
+    throwCompilerError "EXPECTED FILENAME AFTER KILL", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  fileNameVar$ = tiraParseExpression$(startIdx + 1, endIdx, ALIM)
+  IF fileNameVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+  IF exprIs.DataType <> TYPE_STRING THEN
+    throwCompilerErrorAndCancelTira "FILENAME MUST BE STRING", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  strDataPtr$ = tiraGetStringData$(fileNameVar$)
+
+  tiraCall "IAT_DELETEFILEA", 1, strDataPtr$
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_KILL = 1
+
+END FUNCTION ' parse_KILL
+
+''''''''''''''''''''''''
+FUNCTION parse_LBOUND$ (startIdx, endIdx, allowImplicit)
+
+  DIM arrNameTok$
+  DIM comma1 AS LONG
+  DIM vIdx AS LONG
+  DIM scratchName$
+  DIM dimVar$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "LBOUND", 3) = 0 THEN
+    parse_LBOUND$ = ""
+    EXIT FUNCTION
+  END IF
+
+  comma1 = findComma(startIdx + 2, endIdx - 1)
+
+  arrNameTok$ = UCASE$(retTokenText$(lineTokens$(startIdx + 2)))
+  ff = resolveSymbol(arrNameTok$)
+  IF ff = 0 THEN
+    parse_LBOUND$ = ""
+    EXIT FUNCTION
+  END IF
+  vIdx = returnedData2
+
+  IF symbols(vIdx).IsArray = 0 THEN
+    throwCompilerError "LBOUND REQUIRES AN ARRAY", ASIS, 0
+    parse_LBOUND$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF comma1 > 0 THEN
+    dimVar$ = tiraParseExpressionInt$(comma1 + 1, endIdx - 1, allowImplicit, "DIMENSION MUST BE NUMERIC")
+    IF dimVar$ = "" THEN
+      tira_Cancel
+      parse_LBOUND$ = ""
+      EXIT FUNCTION
+    END IF
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("LBOUND", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_LBOUND$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tiraAssign scratchName$, "0"
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_LBOUND$ = scratchName$
+
+END FUNCTION ' parse_LBOUND$
+
+''''''''''''''''''''''''
+FUNCTION parse_LOF$ (startIdx, endIdx, allowImplicit)
+
+  DIM fileNumStart AS LONG
+  DIM fileNumVar$
+  DIM scratchName$
+  DIM baseArr$
+  DIM slotAddr$
+  DIM handleVar$
+  DIM resVar$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "LOF", 3) = 0 THEN
+    parse_LOF$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  fileNumStart = startIdx + 2
+
+  ' Strip the # symbol so the expression evaluates properly
+  IF lineTokens$(fileNumStart) = "#" THEN
+    fileNumStart = fileNumStart + 1
+  ELSE
+    IF LEFT$(lineTokens$(fileNumStart), 1) = "#" THEN
+      lineTokens$(fileNumStart) = MID$(lineTokens$(fileNumStart), 2)
+    END IF
+  END IF
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+  fileNumVar$ = tiraParseExpressionInt$(fileNumStart, endIdx - 1, allowImplicit, "FILENUM MUST BE NUMERIC")
+  IF fileNumVar$ = "" THEN
+    tira_Cancel
+    parse_LOF$ = ""
+    EXIT FUNCTION
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("LOF", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_LOF$ = ""
+    EXIT FUNCTION
+  END IF
+
+  baseArr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADDRESS_OF, baseArr$, "!G_LAYOUT_FILE_HANDLES_ARR", ""
+
+  slotAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraLeaSIB slotAddr$, baseArr$, fileNumVar$, "8"
+
+  handleVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_READ_MEM, handleVar$ + ", " + slotAddr$
+
+  tiraCall "IAT_GETFILESIZE", 2, handleVar$ + ", 0"
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_GET_RET, resVar$
+
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_LOF$ = scratchName$
+
+END FUNCTION ' parse_LOF$
+
+''''''''''''''''''''''''
+FUNCTION parse_MEM$ (startIdx, endIdx, allowImplicit)
+
+  DIM scratchName$
+  DIM vNameTok$
+  DIM vName$
+  DIM vIdx AS LONG
+  DIM memUdtIdx AS LONG
+  DIM baseAddr$
+  DIM destAddr$
+  DIM destSizeAddr$
+  DIM hasIndex AS LONG
+  DIM indicesStr$
+  DIM closeParen AS LONG
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "_MEM", 3) = 0 THEN
+    parse_MEM$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  vNameTok$ = lineTokens$(startIdx + 2)
+  vName$ = UCASE$(vNameTok$)
+
+  ff = resolveSymbol(vName$)
+  IF ff = 0 THEN
+    tira_Cancel
+    parse_MEM$ = ""
+    EXIT FUNCTION
+  END IF
+  vIdx = returnedData2
+
+  hasIndex = 0
+  indicesStr$ = ""
+  IF startIdx + 3 < endIdx THEN
+    IF lineTokenVals(startIdx + 3) = 256 + ASC("(") THEN
+      hasIndex = 1
+      indicesStr$ = tiraParseArrayArgs$(startIdx + 3, endIdx, 0)
+      IF indicesStr$ = "" AND compileError = 1 THEN EXIT FUNCTION
+      closeParen = returnedData2
+    END IF
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("MEM", "_UDT")
+  IF scratchName$ = "" THEN
+    parse_MEM$ = ""
+    EXIT FUNCTION
+  END IF
+
+  ff = findUdtIndex("_MEM")
+  memUdtIdx = returnedData2
+
+  ff = resolveSymbol(scratchName$)
+  IF ff = 1 THEN
+    symbols(returnedData2).DataType = TYPE_UDT
+    symbols(returnedData2).UDTIndex = memUdtIdx
+  END IF
+
+  ' Use tiraFrontendCalcAddress$ to seamlessly fetch the direct memory pointer to the structure's data payload
+  baseAddr$ = tiraFrontendCalcAddress$(vName$, indicesStr$, 0)
+  IF baseAddr$ = "" THEN
+    tira_Cancel
+    parse_MEM$ = ""
+    EXIT FUNCTION
+  END IF
+
+  destAddr$ = tiraFrontendCalcAddress$(scratchName$, "", 0)
+  tiraWriteMem destAddr$, baseAddr$, "8"
+
+  ' Ensure SIZE is natively initialized to zero to prevent uninitialized data corruption inside the UDT mapping
+  destSizeAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, destSizeAddr$, destAddr$, "8"
+  tiraWriteMem destSizeAddr$, "0", "8"
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_UDT
+  exprIs.IsTemp = 1
+  parse_MEM$ = scratchName$
+
+END FUNCTION ' parse_MEM$
+
+''''''''''''''''''''''''
+FUNCTION parse_MEMERROR (startIdx)
+
+  DIM endIdx AS LONG
+  endIdx = lineTokenCount - 1
+
+  ff = verifyNoExtraTokens(endIdx, startIdx, "MEMERROR")
+  IF ff = 0 THEN EXIT FUNCTION
+
+  tira_Start
+
+  tiraNew TC_MEMERROR, ""
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_MEMERROR = 1
+
+END FUNCTION ' parse_MEMERROR
+
+''''''''''''''''''''''''
+FUNCTION parse_MEMFILL (startIdx)
+
+  DIM endIdx AS LONG
+  DIM comma1 AS LONG
+  DIM comma2 AS LONG
+  DIM comma3 AS LONG
+  DIM asIdx AS LONG
+  DIM blockVar$
+  DIM offsetVar$
+  DIM bytesVar$
+  DIM valVar$
+  DIM elemSize AS LONG
+  DIM elemCount$
+  DIM tokIdx AS LONG
+  DIM dtMapped AS LONG
+  DIM valEndIdx AS LONG
+
+  endIdx = lineTokenCount - 1
+
+  comma1 = findComma(startIdx + 1, endIdx)
+  IF comma1 = 0 THEN
+    throwCompilerError "_MEMFILL MISSING ARGUMENTS", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  comma2 = findComma(comma1 + 1, endIdx)
+  IF comma2 = 0 THEN
+    throwCompilerError "_MEMFILL MISSING ARGUMENTS", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  comma3 = findComma(comma2 + 1, endIdx)
+  IF comma3 = 0 THEN
+    throwCompilerError "_MEMFILL MISSING ARGUMENTS", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  asIdx = 0
+  ff = findNextTokenAtDepth0(comma3 + 1, endIdx, TOK_AS)
+  IF ff = 1 THEN
+    asIdx = returnedData2
+  END IF
+
+  valEndIdx = endIdx
+  IF asIdx > 0 THEN valEndIdx = asIdx - 1
+
+  tira_Start
+
+  ' Natively evaluate the memory block argument to trigger index lookups and structural parsing,
+  ' but cleanly discard its result since offsetVar$ inherently provides the definitive absolute address
+  blockVar$ = tiraParseExpression$(startIdx + 1, comma1 - 1, ALIM)
+  IF blockVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  offsetVar$ = tiraParseExpressionInt$(comma1 + 1, comma2 - 1, ALIM, "OFFSET MUST BE NUMERIC")
+  IF offsetVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  bytesVar$ = tiraParseExpressionInt$(comma2 + 1, comma3 - 1, ALIM, "BYTES MUST BE NUMERIC")
+  IF bytesVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  valVar$ = tiraParseExpressionInt$(comma3 + 1, valEndIdx, ALIM, "VALUE MUST BE NUMERIC")
+  IF valVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  elemSize = 1
+  IF asIdx > 0 THEN
+    tokIdx = asIdx + 1
+    tokIdx = parseTypeClause(tokIdx, endIdx)
+    dtMapped = returnedData2
+
+    SELECT CASE dtMapped
+
+      CASE TYPE_BYTE, TYPE_UBYTE: elemSize = 1
+      CASE TYPE_INTEGER, TYPE_UINTEGER: elemSize = 2
+      CASE TYPE_LONG, TYPE_ULONG, TYPE_SINGLE: elemSize = 4
+      CASE TYPE_INTEGER64, TYPE_UINT64, TYPE_DOUBLE: elemSize = 8
+
+    END SELECT ' dtMapped
+
+  END IF
+
+  elemCount$ = tiraDimVar$("T", TYPE_LONG)
+  IF elemSize > 1 THEN
+    tiraOp TC_IDIV, elemCount$, bytesVar$, LTRIM$(STR$(elemSize))
+  ELSE
+    tiraAssign elemCount$, bytesVar$
+  END IF
+
+  ' Map strictly directly into the hardware-accelerated REP STOS engine via tiraMemSetEx
+  tiraMemSetEx offsetVar$, valVar$, elemCount$, LTRIM$(STR$(elemSize))
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_MEMFILL = 1
+
+END FUNCTION ' parse_MEMFILL
+
+''''''''''''''''''''''''
+FUNCTION parse_MKD$ (startIdx, endIdx, allowImplicit)
+
+  DIM arg1$
+  DIM scratchName$
+  DIM dataPtr$
+  DIM descPtr$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "MKD$", 3) = 0 THEN
+    parse_MKD$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_DOUBLE
+
+  arg1$ = tiraParseExpressionNumeric$(startIdx + 2, endIdx - 1, allowImplicit, "INTRINSIC REQUIRES NUMERIC")
+  IF arg1$ = "" THEN
+    parse_MKD$ = ""
+    EXIT FUNCTION
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("MKD", "_DESC$")
+  IF scratchName$ = "" THEN
+    parse_MKD$ = ""
+    EXIT FUNCTION
+  END IF
+
+  dataPtr$ = tiraAllocTempMem$("8")
+
+  ' Have the TIRA backend natively coerce the numeric expression into a 64-bit hardware DOUBLE precision value and save it to the allocated heap string block
+  tiraWriteMem dataPtr$, arg1$, "DOUBLE"
+
+  ' Build the string descriptor pointing to our 8-byte temporary string
+  descPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign descPtr$, scratchName$
+  tiraBuildStringDescriptor descPtr$, dataPtr$, "8", "0"
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_STRING
+  exprIs.IsTemp = 1
+  parse_MKD$ = scratchName$
+
+END FUNCTION ' parse_MKD$
+
+''''''''''''''''''''''''
+FUNCTION parse_MKI$ (startIdx, endIdx, allowImplicit)
+
+  DIM arg1$
+  DIM scratchName$
+  DIM dataPtr$
+  DIM descPtr$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "MKI$", 3) = 0 THEN
+    parse_MKI$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+
+  arg1$ = tiraParseExpressionInt$(startIdx + 2, endIdx - 1, allowImplicit, "INTRINSIC REQUIRES NUMERIC")
+  IF arg1$ = "" THEN
+    parse_MKI$ = ""
+    EXIT FUNCTION
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("MKI", "_DESC$")
+  IF scratchName$ = "" THEN
+    parse_MKI$ = ""
+    EXIT FUNCTION
+  END IF
+
+  dataPtr$ = tiraAllocTempMem$("2")
+
+  ' Write the 2-byte integer payload to the heap natively
+  tiraWriteMem dataPtr$, arg1$, "2"
+
+  ' Build the String Descriptor directly on the Scratchpad memory
+  descPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign descPtr$, scratchName$
+
+  ' Ensure Flags are set to 0 (No Free Required on Temp Heap)
+  tiraBuildStringDescriptor descPtr$, dataPtr$, "2", "0"
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_STRING
+  exprIs.IsTemp = 1
+  parse_MKI$ = scratchName$
+
+END FUNCTION ' parse_MKI$
+
+''''''''''''''''''''''''
+FUNCTION parse_MKL$ (startIdx, endIdx, allowImplicit)
+
+  DIM arg1$
+  DIM scratchName$
+  DIM dataPtr$
+  DIM descPtr$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "MKL$", 3) = 0 THEN
+    parse_MKL$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_LONG
+
+  arg1$ = tiraParseExpressionNumeric$(startIdx + 2, endIdx - 1, allowImplicit, "INTRINSIC REQUIRES NUMERIC")
+  IF arg1$ = "" THEN
+    parse_MKL$ = ""
+    EXIT FUNCTION
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("MKL", "_DESC$")
+  IF scratchName$ = "" THEN
+    parse_MKL$ = ""
+    EXIT FUNCTION
+  END IF
+
+  dataPtr$ = tiraAllocTempMem$("4")
+
+  ' Have the TIRA backend natively coerce the numeric expression into a 32-bit hardware LONG integer value and save it to the allocated heap string block
+  tiraWriteMem dataPtr$, arg1$, "4"
+
+  ' Build the string descriptor pointing to our 4-byte temporary string
+  descPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign descPtr$, scratchName$
+  tiraBuildStringDescriptor descPtr$, dataPtr$, "4", "0"
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_STRING
+  exprIs.IsTemp = 1
+  parse_MKL$ = scratchName$
+
+END FUNCTION ' parse_MKL$
+
+''''''''''''''''''''''''
+FUNCTION parse_MKS$ (startIdx, endIdx, allowImplicit)
+
+  DIM arg1$
+  DIM scratchName$
+  DIM dataPtr$
+  DIM descPtr$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "MKS$", 3) = 0 THEN
+    parse_MKS$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+
+  arg1$ = tiraParseExpressionNumeric$(startIdx + 2, endIdx - 1, allowImplicit, "INTRINSIC REQUIRES NUMERIC")
+  IF arg1$ = "" THEN
+    parse_MKS$ = ""
+    EXIT FUNCTION
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("MKS", "_DESC$")
+  IF scratchName$ = "" THEN
+    parse_MKS$ = ""
+    EXIT FUNCTION
+  END IF
+
+  dataPtr$ = tiraAllocTempMem$("4")
+
+  ' Have the TIRA backend natively coerce the numeric expression into a 32-bit hardware SINGLE precision value and save it to the allocated heap string block
+  tiraWriteMem dataPtr$, arg1$, "SINGLE"
+
+  ' Build the string descriptor pointing to our 4-byte temporary string
+  descPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign descPtr$, scratchName$
+  tiraBuildStringDescriptor descPtr$, dataPtr$, "4", "0"
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_STRING
+  exprIs.IsTemp = 1
+  parse_MKS$ = scratchName$
+
+END FUNCTION ' parse_MKS$
+
+''''''''''''''''''''''''
+FUNCTION parse_MOUSEBUTTON$ (startIdx, endIdx, allowImplicit)
+
+  DIM arg1$
+  DIM scratchName$
+  DIM resVar$
+  DIM lblB2$
+  DIM lblB3$
+  DIM lblEnd$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "_MOUSEBUTTON", 3) = 0 THEN
+    parse_MOUSEBUTTON$ = ""
+    EXIT FUNCTION
+  END IF
+
+  IF compileHasGraphics = 0 THEN
+    throwCompilerError "_MOUSEBUTTON REQUIRES #GRAPHICS", ASIS, 0
+    parse_MOUSEBUTTON$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+
+  arg1$ = tiraParseExpressionInt$(startIdx + 2, endIdx - 1, allowImplicit, "INTRINSIC REQUIRES NUMERIC")
+  IF arg1$ = "" THEN
+    parse_MOUSEBUTTON$ = ""
+    EXIT FUNCTION
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("MOUSEBUTTON", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_MOUSEBUTTON$ = ""
+    EXIT FUNCTION
+  END IF
+
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+
+  lblB2$ = tiraLabelCreateNew$("MB_2")
+  lblB3$ = tiraLabelCreateNew$("MB_3")
+  lblEnd$ = tiraLabelCreateNew$("MB_END")
+
+  tiraJmpCond "JE", arg1$, "2", lblB2$
+  tiraJmpCond "JE", arg1$, "3", lblB3$
+  tiraAssign resVar$, "!G_IO_MOUSE_B1_VAL"
+  tiraJmp lblEnd$
+
+  tiraLabel lblB2$
+  tiraAssign resVar$, "!G_IO_MOUSE_B2_VAL"
+  tiraJmp lblEnd$
+
+  tiraLabel lblB3$
+  tiraAssign resVar$, "!G_IO_MOUSE_B3_VAL"
+
+  tiraLabel lblEnd$
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_MOUSEBUTTON$ = scratchName$
+
+END FUNCTION ' parse_MOUSEBUTTON$
+
+''''''''''''''''''''''''
+FUNCTION parse_MOUSEINPUT$ (startIdx, endIdx, allowImplicit)
+
+  DIM scratchName$
+  DIM resVar$
+
+  IF startIdx <> endIdx THEN
+    throwCompilerError "MALFORMED _MOUSEINPUT", ASIS, 0
+    parse_MOUSEINPUT$ = ""
+    EXIT FUNCTION
+  END IF
+
+  IF compileHasGraphics = 0 THEN
+    throwCompilerError "_MOUSEINPUT REQUIRES #GRAPHICS", ASIS, 0
+    parse_MOUSEINPUT$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  scratchName$ = tiraResolveHoistVar$("MOUSEINPUT", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_MOUSEINPUT$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tiraCall "RT_MOUSEINPUT", 0, ""
+
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_GET_RET, resVar$
+
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_MOUSEINPUT$ = scratchName$
+
+END FUNCTION ' parse_MOUSEINPUT$
+
+''''''''''''''''''''''''
+FUNCTION parse_MOUSEX$ (startIdx, endIdx, allowImplicit)
+
+  DIM scratchName$
+
+  IF startIdx <> endIdx THEN
+    throwCompilerError "MALFORMED _MOUSEX", ASIS, 0
+    parse_MOUSEX$ = ""
+    EXIT FUNCTION
+  END IF
+
+  IF compileHasGraphics = 0 THEN
+    throwCompilerError "_MOUSEX REQUIRES #GRAPHICS", ASIS, 0
+    parse_MOUSEX$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  scratchName$ = tiraResolveHoistVar$("MOUSEX", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_MOUSEX$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tiraAssign scratchName$, "!G_IO_MOUSE_X_VAL"
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_MOUSEX$ = scratchName$
+
+END FUNCTION ' parse_MOUSEX$
+
+''''''''''''''''''''''''
+FUNCTION parse_MOUSEY$ (startIdx, endIdx, allowImplicit)
+
+  DIM scratchName$
+
+  IF startIdx <> endIdx THEN
+    throwCompilerError "MALFORMED _MOUSEY", ASIS, 0
+    parse_MOUSEY$ = ""
+    EXIT FUNCTION
+  END IF
+
+  IF compileHasGraphics = 0 THEN
+    throwCompilerError "_MOUSEY REQUIRES #GRAPHICS", ASIS, 0
+    parse_MOUSEY$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  scratchName$ = tiraResolveHoistVar$("MOUSEY", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_MOUSEY$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tiraAssign scratchName$, "!G_IO_MOUSE_Y_VAL"
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_MOUSEY$ = scratchName$
+
+END FUNCTION ' parse_MOUSEY$
+
+''''''''''''''''''''''''
+FUNCTION parse_MOUSEWHEEL$ (startIdx, endIdx, allowImplicit)
+
+  DIM scratchName$
+
+  IF startIdx <> endIdx THEN
+    throwCompilerError "MALFORMED _MOUSEWHEEL", ASIS, 0
+    parse_MOUSEWHEEL$ = ""
+    EXIT FUNCTION
+  END IF
+
+  IF compileHasGraphics = 0 THEN
+    throwCompilerError "_MOUSEWHEEL REQUIRES #GRAPHICS", ASIS, 0
+    parse_MOUSEWHEEL$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  scratchName$ = tiraResolveHoistVar$("MOUSEWHEEL", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_MOUSEWHEEL$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tiraAssign scratchName$, "!G_IO_MOUSE_SCRL_VAL"
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_MOUSEWHEEL$ = scratchName$
+
+END FUNCTION ' parse_MOUSEWHEEL$
+
+''''''''''''''''''''''''
+FUNCTION parse_OPEN (startIdx)
+
+  DIM hasFor AS LONG
+  DIM forIdx AS LONG
+  DIM asIdx AS LONG
+  DIM fileNameStart AS LONG
+  DIM fileNameEnd AS LONG
+  DIM fileNumStart AS LONG
+  DIM fileNameVar$
+  DIM fileNumVar$
+  DIM tokVal AS LONG
+  DIM accessVal$
+  DIM dispVal$
+  DIM strDataPtr$
+  DIM argList$
+  DIM handleVar$
+  DIM baseArr$
+  DIM slotAddr$
+  DIM endIdx AS LONG
+
+  endIdx = lineTokenCount - 1
+
+  hasFor = 0
+  forIdx = 0
+  ff = findNextTokenAtDepth0(startIdx + 1, endIdx, TOK_FOR)
+  IF ff = 1 THEN
+    hasFor = 1
+    forIdx = returnedData2
+  END IF
+
+  asIdx = 0
+  ff = findNextTokenAtDepth0(startIdx + 1, endIdx, TOK_AS)
+  IF ff = 1 THEN
+    asIdx = returnedData2
+  ELSE
+    throwCompilerError "OPEN MISSING AS", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  fileNameStart = startIdx + 1
+  fileNameEnd = asIdx - 1
+  IF hasFor = 1 THEN fileNameEnd = forIdx - 1
+
+  IF hasFor = 1 THEN
+    IF forIdx + 1 < asIdx THEN
+      tokVal = lineTokenVals(forIdx + 1)
+      SELECT CASE tokVal
+        CASE TOK_BINARY, TOK_RANDOM, TOK_INPUT
+        CASE ELSE
+          throwCompilerError "INVALID FILE MODE (ONLY BINARY/RANDOM/INPUT SUPPORTED)", ASIS, 0
+          EXIT FUNCTION
+      END SELECT
+    ELSE
+      throwCompilerError "OPEN MISSING MODE AFTER FOR", ASIS, 0
+      EXIT FUNCTION
+    END IF
+  END IF
+
+  fileNumStart = asIdx + 1
+  IF fileNumStart <= endIdx THEN
+    ' Strip the # symbol so the expression evaluates properly
+    IF lineTokens$(fileNumStart) = "#" THEN
+      fileNumStart = fileNumStart + 1
+    ELSE
+      IF LEFT$(lineTokens$(fileNumStart), 1) = "#" THEN
+        lineTokens$(fileNumStart) = MID$(lineTokens$(fileNumStart), 2)
+      END IF
+    END IF
+  END IF
+
+  tira_Start
+
+  fileNameVar$ = tiraParseExpression$(fileNameStart, fileNameEnd, ALIM)
+  IF fileNameVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+  IF exprIs.DataType <> TYPE_STRING THEN
+    throwCompilerErrorAndCancelTira "FILENAME MUST BE STRING", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  fileNumVar$ = tiraParseExpressionInt$(fileNumStart, endIdx, ALIM, "FILENUM MUST BE NUMERIC")
+  IF fileNumVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  ' Setup generic OS constants mapping to the required behavior natively to bypass CPU register constraints
+  IF tokVal = TOK_INPUT THEN
+    accessVal$ = "-2147483648" ' read only access
+    dispVal$ = "3" ' opens an existing file
+  ELSE
+    accessVal$ = "-1073741824" ' GENERIC_READ OR GENERIC_WRITE
+    dispVal$ = "4" ' OPEN_ALWAYS
+  END IF
+
+  ' String arrays naturally track null terminators so it resolves seamlessly here to map directly into OS requirements
+  strDataPtr$ = tiraGetStringData$(fileNameVar$)
+
+  ' Execute the CreateFileA procedure and allow the OS to perform file locking tracking
+  ' ShareMode = 3 (FILE_SHARE_READ OR FILE_SHARE_WRITE)
+  argList$ = strDataPtr$ + ", " + accessVal$ + ", 3, 0, " + dispVal$ + ", 128, 0"
+  tiraCall "IAT_CREATEFILEA", 7, argList$
+
+  handleVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_GET_RET, handleVar$
+
+  ' Push OS Pointer Handle directly into the corresponding layout array index utilizing the provided File Number
+  baseArr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADDRESS_OF, baseArr$, "!G_LAYOUT_FILE_HANDLES_ARR", ""
+
+  slotAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraLeaSIB slotAddr$, baseArr$, fileNumVar$, "8"
+
+  tiraWriteMem slotAddr$, handleVar$, "8"
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_OPEN = 1
+
+END FUNCTION ' parse_OPEN
+
+''''''''''''''''''''''''
+FUNCTION parse_PAINT (startIdx)
+
+  DIM endIdx AS LONG
+  DIM hasStep AS LONG
+  DIM tokIdx AS LONG
+  DIM comma1 AS LONG
+  DIM comma2 AS LONG
+  DIM cComma AS LONG
+  DIM cStart AS LONG
+  DIM cEnd AS LONG
+  DIM fillEnd AS LONG
+
+  endIdx = lineTokenCount - 1
+
+  tokIdx = startIdx + 1
+  hasStep = 0
+  IF tokIdx <= endIdx THEN
+    IF lineTokenVals(tokIdx) = TOK_STEP THEN
+      hasStep = 1
+      tokIdx = tokIdx + 1
+    END IF
+  END IF
+
+  comma1 = findComma(tokIdx, endIdx)
+  IF comma1 = 0 THEN
+    throwCompilerError "PAINT REQUIRES FILL COLOR", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  comma2 = findComma(comma1 + 1, endIdx)
+
+  cComma = retCoordinateBoundaries(tokIdx, comma1 - 1)
+  IF cComma = 0 THEN
+    throwCompilerError "PAINT MISSING X, Y", ASIS, 0
+    EXIT FUNCTION
+  END IF
+  cStart = returnedData2
+  cEnd = returnedData3
+
+  tira_Start
+
+  xVar$ = tiraParseExpressionInt$(cStart, cComma - 1, ALIM, "COORDINATE MUST BE NUMERIC")
+  IF xVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  yVar$ = tiraParseExpressionInt$(cComma + 1, cEnd, ALIM, "COORDINATE MUST BE NUMERIC")
+  IF yVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  IF hasStep = 1 THEN
+    tiraOp TC_ADD, xVar$, xVar$, "!G_GFX_CUR_X_VAL"
+    tiraOp TC_ADD, yVar$, yVar$, "!G_GFX_CUR_Y_VAL"
+  END IF
+
+  fillEnd = endIdx
+  IF comma2 > 0 THEN fillEnd = comma2 - 1
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+
+  fillVar$ = tiraParseExpression$(comma1 + 1, fillEnd, ALIM)
+  IF fillVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  fillIsStr$ = tiraDimVar$("T", TYPE_LONG)
+  IF exprIs.DataType = TYPE_STRING THEN
+    tiraAssign fillIsStr$, "1"
+  ELSE
+    tiraAssign fillIsStr$, "0"
+  END IF
+
+  IF comma2 > 0 THEN
+    borderVar$ = tiraParseExpressionInt$(comma2 + 1, endIdx, ALIM, "BORDER COLOR MUST BE NUMERIC")
+    IF borderVar$ = "" THEN
+      tira_Cancel
+      EXIT FUNCTION
+    END IF
+  ELSE
+    borderVar$ = tiraDimVar$("T", TYPE_LONG)
+    lblDefBorder$ = tiraLabelCreateNew$("DEF_BORDER")
+    lblBorderDone$ = tiraLabelCreateNew$("BORDER_DONE")
+
+    tiraJmpCond "JE", fillIsStr$, "1", lblDefBorder$
+    tiraAssign borderVar$, fillVar$
+    tiraJmp lblBorderDone$
+    tiraLabel lblDefBorder$
+    tiraAssign borderVar$, "!G_GFX_FG_VAL"
+    tiraLabel lblBorderDone$
+  END IF
+
+  ' Update graphics tracking coordinates to match standard execution rules
+  tiraAssign "!G_GFX_CUR_X_VAL", xVar$
+  tiraAssign "!G_GFX_CUR_Y_VAL", yVar$
+
+  tiraCall "RT_PAINT", 5, xVar$ + ", " + yVar$ + ", " + fillVar$ + ", " + fillIsStr$ + ", " + borderVar$
+
+  tiraTriggerAutoDisplay
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_PAINT = 1
+
+END FUNCTION ' parse_PAINT
+
+''''''''''''''''''''''''
+FUNCTION parse_PALETTE (startIdx)
+
+  DIM comma1 AS LONG
+  DIM idxVar$
+  DIM colorVar$
+  DIM mappedColor$
+  DIM skipLbl$
+  DIM palDescPtr$
+  DIM palDataAddr$
+  DIM srcOffsetVar$
+  DIM srcAddr$
+  DIM destOffsetVar$
+  DIM destAddr$
+  DIM colorVal$
+  DIM endIdx AS LONG
+
+  endIdx = lineTokenCount - 1
+
+  IF endIdx < startIdx + 1 THEN
+    parse_PALETTE = 1
+    EXIT FUNCTION
+  END IF
+
+  comma1 = findComma(startIdx + 1, endIdx)
+
+  IF comma1 = 0 THEN
+    throwCompilerError "PALETTE REQUIRES 2 ARGUMENTS", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  idxVar$ = tiraParseExpressionInt$(startIdx + 1, comma1 - 1, ALIM, "PALETTE INDEX MUST BE NUMERIC")
+  IF idxVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  colorVar$ = tiraParseExpressionInt$(comma1 + 1, endIdx, ALIM, "COLOR VALUE MUST BE NUMERIC")
+  IF colorVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  skipLbl$ = tiraLabelCreateNew$("SKIP_PAL")
+
+  tiraJmpCond "JL", idxVar$, "0", skipLbl$
+  tiraJmpCond "JG", idxVar$, "255", skipLbl$
+
+  ' Mask the source color to 0-15 to map EGA colors to our standard VGA palette block
+  mappedColor$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_AND, mappedColor$, colorVar$, "15"
+
+  palDescPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign palDescPtr$, "!G_GFX_PALETTE_DESC$"
+
+  palDataAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_READ_MEM, palDataAddr$ + ", " + palDescPtr$
+
+  srcOffsetVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_MUL, srcOffsetVar$, mappedColor$, "4"
+
+  srcAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, srcAddr$, palDataAddr$, srcOffsetVar$
+
+  destOffsetVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_MUL, destOffsetVar$, idxVar$, "4"
+
+  destAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, destAddr$, palDataAddr$, destOffsetVar$
+
+  colorVal$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_READ_MEM, colorVal$ + ", " + srcAddr$
+
+  tiraWriteMem destAddr$, colorVal$, "4"
+
+  tiraTriggerAutoDisplay
+
+  tiraLabel skipLbl$
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_PALETTE = 1
+
+END FUNCTION ' parse_PALETTE
+
+''''''''''''''''''''''''
+FUNCTION parse_PALETTECOLOR (startIdx)
+
+  DIM comma1 AS LONG
+  DIM idxVar$
+  DIM colorVar$
+  DIM skipLbl$
+  DIM palDescPtr$
+  DIM palDataAddr$
+  DIM offsetVar$
+  DIM targetAddr$
+  DIM endIdx AS LONG
+
+  endIdx = lineTokenCount - 1
+
+  IF compileHasGraphics = 0 THEN
+    throwCompilerError "_PALETTECOLOR REQUIRES #GRAPHICS", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  comma1 = findComma(startIdx + 1, endIdx)
+
+  IF comma1 = 0 THEN
+    throwCompilerError "_PALETTECOLOR REQUIRES 2 ARGUMENTS", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  idxVar$ = tiraParseExpressionInt$(startIdx + 1, comma1 - 1, ALIM, "PALETTE INDEX MUST BE NUMERIC")
+  IF idxVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  colorVar$ = tiraParseExpressionInt$(comma1 + 1, endIdx, ALIM, "COLOR VALUE MUST BE NUMERIC")
+  IF colorVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  skipLbl$ = tiraLabelCreateNew$("SKIP_PAL")
+
+  tiraJmpCond "JL", idxVar$, "0", skipLbl$
+  tiraJmpCond "JG", idxVar$, "255", skipLbl$
+
+  palDescPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign palDescPtr$, "!G_GFX_PALETTE_DESC$"
+
+  palDataAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_READ_MEM, palDataAddr$ + ", " + palDescPtr$
+
+  offsetVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_MUL, offsetVar$, idxVar$, "4"
+
+  targetAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, targetAddr$, palDataAddr$, offsetVar$
+
+  tiraWriteMem targetAddr$, colorVar$, "4"
+
+  tiraTriggerAutoDisplay
+
+  tiraLabel skipLbl$
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_PALETTECOLOR = 1
+
+END FUNCTION ' parse_PALETTECOLOR
+
+''''''''''''''''''''''''
+FUNCTION parse_PALETTECOLOR_FUNC$ (startIdx, endIdx, allowImplicit)
+
+  DIM arg1$
+  DIM scratchName$
+  DIM resVar$
+  DIM palDescPtr$
+  DIM palDataAddr$
+  DIM offsetVar$
+  DIM targetAddr$
+  DIM skipLbl$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "_PALETTECOLOR", 3) = 0 THEN
+    parse_PALETTECOLOR_FUNC$ = ""
+    EXIT FUNCTION
+  END IF
+
+  IF compileHasGraphics = 0 THEN
+    throwCompilerError "_PALETTECOLOR REQUIRES #GRAPHICS", ASIS, 0
+    parse_PALETTECOLOR_FUNC$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+
+  arg1$ = tiraParseExpressionInt$(startIdx + 2, endIdx - 1, allowImplicit, "INDEX MUST BE NUMERIC")
+  IF arg1$ = "" THEN
+    parse_PALETTECOLOR_FUNC$ = ""
+    EXIT FUNCTION
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("PALCOL", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_PALETTECOLOR_FUNC$ = ""
+    EXIT FUNCTION
+  END IF
+
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign resVar$, "0"
+
+  skipLbl$ = tiraLabelCreateNew$("SKIP_PALCOL")
+
+  tiraJmpCond "JL", arg1$, "0", skipLbl$
+  tiraJmpCond "JG", arg1$, "255", skipLbl$
+
+  palDescPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign palDescPtr$, "!G_GFX_PALETTE_DESC$"
+
+  palDataAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_READ_MEM, palDataAddr$ + ", " + palDescPtr$
+
+  offsetVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_MUL, offsetVar$, arg1$, "4"
+
+  targetAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, targetAddr$, palDataAddr$, offsetVar$
+
+  tiraNew TC_READ_MEM, resVar$ + ", " + targetAddr$
+
+  tiraLabel skipLbl$
+
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_PALETTECOLOR_FUNC$ = scratchName$
+
+END FUNCTION ' parse_PALETTECOLOR_FUNC$
+
+''''''''''''''''''''''''
+FUNCTION parse_POINT$ (startIdx, endIdx, allowImplicit)
+
+  DIM comma1 AS LONG
+  DIM arg1$
+  DIM arg2$
+  DIM scratchName$
+  DIM resVar$
+  DIM skipLbl$
+  DIM offsetVar$
+  DIM targetAddr$
+  DIM colorByte$
+  DIM lblX$
+  DIM lblY$
+  DIM lblEnd$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "POINT", 3) = 0 THEN
+    parse_POINT$ = ""
+    EXIT FUNCTION
+  END IF
+
+  IF compileHasGraphics = 0 THEN
+    throwCompilerError "POINT REQUIRES #GRAPHICS", ASIS, 0
+    parse_POINT$ = ""
+    EXIT FUNCTION
+  END IF
+
+  comma1 = findComma(startIdx + 2, endIdx - 1)
+
+  tira_Start
+
+  scratchName$ = tiraResolveHoistVar$("POINT", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_POINT$ = ""
+    EXIT FUNCTION
+  END IF
+
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign resVar$, "-1"
+
+  IF comma1 = 0 THEN
+    ' 1 argument: POINT(n)
+    IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+    arg1$ = tiraParseExpressionInt$(startIdx + 2, endIdx - 1, allowImplicit, "POINT ARGUMENT MUST BE NUMERIC")
+    IF arg1$ = "" THEN
+      parse_POINT$ = ""
+      EXIT FUNCTION
+    END IF
+
+    lblX$ = tiraLabelCreateNew$("PT_X")
+    lblY$ = tiraLabelCreateNew$("PT_Y")
+    lblEnd$ = tiraLabelCreateNew$("PT_END")
+
+    tiraJmpCond "JE", arg1$, "0", lblX$
+    tiraJmpCond "JE", arg1$, "2", lblX$
+    tiraJmpCond "JE", arg1$, "1", lblY$
+    tiraJmpCond "JE", arg1$, "3", lblY$
+    tiraJmp lblEnd$
+
+    tiraLabel lblX$
+    tiraAssign resVar$, "!G_GFX_CUR_X_VAL"
+    tiraJmp lblEnd$
+
+    tiraLabel lblY$
+    tiraAssign resVar$, "!G_GFX_CUR_Y_VAL"
+    tiraLabel lblEnd$
+
+  ELSE
+    ' 2 arguments: POINT(x, y)
+    IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+    arg1$ = tiraParseExpressionInt$(startIdx + 2, comma1 - 1, allowImplicit, "COORDINATE MUST BE NUMERIC")
+    IF arg1$ = "" THEN
+      parse_POINT$ = ""
+      EXIT FUNCTION
+    END IF
+
+    IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+    arg2$ = tiraParseExpressionInt$(comma1 + 1, endIdx - 1, allowImplicit, "COORDINATE MUST BE NUMERIC")
+    IF arg2$ = "" THEN
+      parse_POINT$ = ""
+      EXIT FUNCTION
+    END IF
+
+    skipLbl$ = tiraLabelCreateNew$("PT_SKIP")
+
+    ' Speed boost optimization: Unsigned JAE bounds check validates both < 0 and >= max simultaneously
+    tiraJmpCond "JAE", arg1$, cTrNum$(gfxConfig.SizeX), skipLbl$
+    tiraJmpCond "JAE", arg2$, cTrNum$(gfxConfig.SizeY), skipLbl$
+
+    offsetVar$ = tiraDimVar$("T", TYPE_LONG)
+    tiraOp TC_MUL, offsetVar$, arg2$, cTrNum$(gfxConfig.SizeX)
+    tiraOp TC_ADD, offsetVar$, offsetVar$, arg1$
+
+    targetAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraOp TC_ADD, targetAddr$, "!G_FRAMEBUF_BACK_PTR", offsetVar$
+
+    colorByte$ = tiraDimVar$("T", TYPE_UBYTE)
+    tiraNew TC_READ_MEM, colorByte$ + ", " + targetAddr$
+
+    tiraAssign resVar$, colorByte$
+
+    tiraLabel skipLbl$
+  END IF
+
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_POINT$ = scratchName$
+
+END FUNCTION ' parse_POINT$
+
+''''''''''''''''''''''''
+FUNCTION parse_POKE (startIdx)
+
+  ' This function evaluates the poke command to write data into memory
+  ' Rather than exposing direct memory access which would crash a modern operating system
+  ' we specifically look for address 1047. In legacy dos systems, address 1047 holds
+  ' the keyboard flags where the bit representing 32 controls the numlock state
+  ' If the user script tries to write to 1047, we extract the requested numlock state
+  ' and use the windows api to simulate physical key presses if the state needs to change
+
+  DIM commaIdx AS LONG
+  DIM addrVar$
+  DIM valVar$
+  DIM skipLbl$
+  DIM desired$
+  DIM current$
+  DIM endIdx AS LONG
+
+  endIdx = lineTokenCount - 1
+
+  commaIdx = findComma(startIdx + 1, endIdx)
+  IF commaIdx = 0 THEN
+    throwCompilerError "POKE MISSING COMMA", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  ' Evaluate the address and value arguments provided by the user script
+  addrVar$ = tiraParseExpressionInt$(startIdx + 1, commaIdx - 1, ALIM, "POKE ADDRESS MUST BE NUMERIC")
+  IF addrVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  valVar$ = tiraParseExpressionInt$(commaIdx + 1, endIdx, ALIM, "POKE VALUE MUST BE NUMERIC")
+  IF valVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  ' Create a jump label to skip the emulation block if the address is not exactly 1047
+  skipLbl$ = tiraLabelCreateNew$("SKIP_POKE")
+  tiraJmpCond "JNE", addrVar$, "1047", skipLbl$
+
+  ' Extract the target state by masking out the thirty two bit and shifting it down to the lowest bit position
+  desired$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_AND, desired$, valVar$, "32"
+  tiraOp TC_SHR, desired$, desired$, "5"
+
+  ' Ask windows for the current hardware state of the numlock key using its virtual key code
+  tiraCall "IAT_GETKEYSTATE", 1, "144"
+  current$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_GET_RET, current$
+
+  ' Mask the windows return value to isolate just the active toggle state bit
+  tiraOp TC_AND, current$, current$, "1"
+
+  ' Compare the requested state with the current hardware state and jump past the toggle event if they match
+  tiraJmpCond "JE", desired$, current$, skipLbl$
+
+  ' Fire down and up keyboard events to physically toggle the numlock key at the hardware level
+  tiraCall "IAT_KEYBD_EVENT", 4, "144, 69, 1, 0"
+  tiraCall "IAT_KEYBD_EVENT", 4, "144, 69, 3, 0"
+
+  tiraLabel skipLbl$
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_POKE = 1
+
+END FUNCTION ' parse_POKE
+
+''''''''''''''''''''''''
+FUNCTION parse_PUT (startIdx)
+
+  DIM comma1 AS LONG
+  DIM comma2 AS LONG
+  DIM cComma AS LONG
+  DIM isFileIO AS LONG
+  DIM cStart AS LONG
+  DIM cEnd AS LONG
+  DIM tokIdx AS LONG
+  DIM closeParen AS LONG
+  DIM vIdx AS LONG
+  DIM elemSize AS LONG
+  DIM statElems AS LONG
+  DIM endIdx AS LONG
+  DIM putMode AS LONG
+  DIM indicesStr$
+  DIM numParsedIndices AS LONG
+  DIM dimEnd AS LONG
+
+  endIdx = lineTokenCount - 1
+
+  comma1 = findComma(startIdx + 1, endIdx)
+
+  cComma = 0
+  IF comma1 > 0 THEN
+    cComma = retCoordinateBoundaries(startIdx + 1, comma1 - 1)
+  END IF
+
+  isFileIO = 0
+  IF cComma = 0 THEN
+    isFileIO = 1
+  END IF
+
+  IF isFileIO = 1 THEN
+    parse_PUT = parse_PUT_File(startIdx, endIdx)
+    EXIT FUNCTION
+  END IF
+
+  IF compileHasGraphics = 0 THEN
+    throwCompilerError "GRAPHICS PUT REQUIRES #GRAPHICS", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  IF comma1 = 0 THEN
+    throwCompilerError "PUT MISSING ARRAY VARIABLE", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  cComma = retCoordinateBoundaries(startIdx + 1, comma1 - 1)
+  IF cComma = 0 THEN
+    throwCompilerError "PUT MISSING X, Y", ASIS, 0
+    EXIT FUNCTION
+  END IF
+  cStart = returnedData2
+  cEnd = returnedData3
+
+  tira_Start
+
+  x$ = tiraParseExpressionInt$(cStart, cComma - 1, ALIM, "COORDINATE MUST BE NUMERIC")
+  IF x$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  y$ = tiraParseExpressionInt$(cComma + 1, cEnd, ALIM, "COORDINATE MUST BE NUMERIC")
+  IF y$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  comma2 = findComma(comma1 + 1, endIdx)
+
+  dimEnd = endIdx
+  IF comma2 > 0 THEN dimEnd = comma2 - 1
+
+  tokIdx = comma1 + 1
+  vTok$ = lineTokens$(tokIdx)
+  vName$ = UCASE$(vTok$)
+  ff = resolveSymbol(vName$)
+  IF ff = 0 THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+  vIdx = returnedData2
+
+  IF symbols(vIdx).IsArray = 0 THEN
+    throwCompilerErrorAndCancelTira "PUT TARGET MUST BE AN ARRAY", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  indicesStr$ = ""
+  numParsedIndices = 0
+
+  tokIdx = tokIdx + 1
+  IF tokIdx <= dimEnd THEN
+    IF lineTokenVals(tokIdx) = 256 + ASC("(") THEN
+      indicesStr$ = tiraParseArrayArgs$(tokIdx, dimEnd, 0)
+      IF indicesStr$ = "" AND compileError = 1 THEN EXIT FUNCTION
+      closeParen = returnedData2
+      numParsedIndices = returnedData3
+    END IF
+  END IF
+
+  IF symbols(vIdx).NumDimensions > 0 AND numParsedIndices > 0 AND numParsedIndices <> symbols(vIdx).NumDimensions THEN
+    throwCompilerError "WRONG NUMBER OF DIMENSIONS", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  ptr$ = tiraFrontendCalcAddress$(vName$, indicesStr$, 0)
+  IF ptr$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  elemSize = retElementByteSize(vIdx)
+
+  descAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADDRESS_OF, descAddr$, "#" + LTRIM$(STR$(vIdx)), ""
+
+  numDims$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_READ_MEM_OFFSET, numDims$ + ", " + descAddr$ + ", 12"
+
+  totalElems$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign totalElems$, "1"
+
+  dimItr$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign dimItr$, "0"
+  lblDimTop$ = tiraLabelCreateNew$("DIM_TOP")
+  lblDimDone$ = tiraLabelCreateNew$("DIM_DONE")
+
+  tiraLabel lblDimTop$
+  tiraJmpCond "JGE", dimItr$, numDims$, lblDimDone$
+
+  offsetVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_MUL, offsetVar$, dimItr$, "8"
+  tiraOp TC_ADD, offsetVar$, offsetVar$, "16"
+
+  dimLimitAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, dimLimitAddr$, descAddr$, offsetVar$
+
+  dimLimit$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_READ_MEM, dimLimit$ + ", " + dimLimitAddr$
+
+  tiraOp TC_MUL, totalElems$, totalElems$, dimLimit$
+  tiraOp TC_ADD, dimItr$, dimItr$, "1"
+  tiraJmp lblDimTop$
+
+  tiraLabel lblDimDone$
+
+  byteSize$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_MUL, byteSize$, totalElems$, LTRIM$(RTRIM$(STR$(elemSize)))
+
+  baseAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_READ_MEM, baseAddr$ + ", " + descAddr$
+
+  endPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, endPtr$, baseAddr$, byteSize$
+
+  putMode = 1
+  IF comma2 > 0 THEN
+    SELECT CASE lineTokenVals(comma2 + 1)
+      CASE TOK_PSET
+        putMode = 0
+      CASE TOK_XOR
+        putMode = 1
+      CASE TOK_AND
+        putMode = 2
+      CASE TOK_OR
+        putMode = 3
+      CASE ELSE
+        throwCompilerErrorAndCancelTira "UNSUPPORTED GRAPHIC STYLE FOR PUT", ASIS, 0
+        EXIT FUNCTION
+    END SELECT
+  END IF
+
+  tiraCall "RT_PUT", 5, x$ + ", " + y$ + ", " + ptr$ + ", " + endPtr$ + ", " + LTRIM$(STR$(putMode))
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_PUT = 1
+
+END FUNCTION ' parse_PUT
+
+''''''''''''''''''''''''
+FUNCTION parse_PUT_File (startIdx, endIdx)
+
+  DIM comma1 AS LONG
+  DIM comma2 AS LONG
+  DIM targetStart AS LONG
+  DIM closeParen AS LONG
+  DIM tokIdx AS LONG
+  DIM vTok$, vName$
+  DIM vIdx AS LONG
+  DIM dt AS LONG
+  DIM elemSize AS LONG
+  DIM fixedLen AS LONG
+  DIM indicesStr$
+  DIM numParsedIndices AS LONG
+
+  DIM hasArrayIndices AS LONG
+
+  tokIdx = startIdx + 1
+  IF lineTokens$(tokIdx) = "#" THEN
+    tokIdx = tokIdx + 1
+  ELSE
+    IF LEFT$(lineTokens$(tokIdx), 1) = "#" THEN
+      lineTokens$(tokIdx) = MID$(lineTokens$(tokIdx), 2)
+    END IF
+  END IF
+
+  comma1 = findComma(tokIdx, endIdx)
+  IF comma1 = 0 THEN
+    throwCompilerError "PUT MISSING COMMA", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  comma2 = findComma(comma1 + 1, endIdx)
+  IF comma2 = 0 THEN
+    targetStart = comma1 + 1
+  ELSE
+    targetStart = comma2 + 1
+  END IF
+
+  IF targetStart > endIdx THEN
+    throwCompilerError "PUT MISSING TARGET VARIABLE", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  vTok$ = lineTokens$(targetStart)
+  vName$ = UCASE$(vTok$)
+  ff = resolveSymbol(vName$)
+  IF ff = 0 THEN EXIT FUNCTION
+  vIdx = returnedData2
+
+  tira_Start
+
+  fileNumVar$ = tiraParseExpressionInt$(tokIdx, comma1 - 1, ALIM, "FILE NUM MUST BE NUMERIC")
+  IF fileNumVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  indicesStr$ = ""
+  numParsedIndices = 0
+  hasArrayIndices = 0
+
+  IF targetStart < endIdx THEN
+    IF lineTokenVals(targetStart + 1) = 256 + ASC("(") THEN
+      hasArrayIndices = 1
+      indicesStr$ = tiraParseArrayArgs$(targetStart + 1, endIdx, ALIM)
+      IF indicesStr$ = "" AND compileError = 1 THEN EXIT FUNCTION
+      closeParen = returnedData2
+      numParsedIndices = returnedData3
+    END IF
+  END IF
+
+  IF symbols(vIdx).NumDimensions > 0 AND numParsedIndices > 0 AND numParsedIndices <> symbols(vIdx).NumDimensions THEN
+    throwCompilerError "WRONG NUMBER OF DIMENSIONS", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  baseArr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADDRESS_OF, baseArr$, "!G_LAYOUT_FILE_HANDLES_ARR", ""
+
+  slotAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraLeaSIB slotAddr$, baseArr$, fileNumVar$, "8"
+
+  handleVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_READ_MEM, handleVar$ + ", " + slotAddr$
+
+  skipFileIOLbl$ = tiraLabelCreateNew$("SKIP_FILE_IO")
+
+  tiraJmpCond "JE", handleVar$, "0", skipFileIOLbl$
+  tiraJmpCond "JE", handleVar$, "-1", skipFileIOLbl$
+
+  ptr$ = tiraFrontendCalcAddress$(vName$, indicesStr$, 0)
+  IF ptr$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  dt = symbols(vIdx).DataType
+  elemSize = retElementByteSize(vIdx)
+  fixedLen = retFixedStringLength(vIdx)
+
+  dataSize$ = tiraDimVar$("T", TYPE_LONG)
+  dataPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+
+  IF dt = TYPE_STRING AND fixedLen = 0 THEN
+    descPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+
+    IF symbols(vIdx).IsArray > 0 THEN
+      tiraNew TC_READ_MEM, descPtr$ + ", " + ptr$
+    ELSE
+      tiraAssign descPtr$, ptr$
+    END IF
+
+    tiraJmpCond "JE", descPtr$, "0", skipFileIOLbl$
+
+    tiraAssign dataSize$, tiraGetStringLen$(descPtr$)
+    tiraAssign dataPtr$, tiraGetStringData$(descPtr$)
+
+    tiraJmpCond "JLE", dataSize$, "0", skipFileIOLbl$
+    tiraJmpCond "JE", dataPtr$, "0", skipFileIOLbl$
+
+  ELSE
+    IF dt = TYPE_STRING AND fixedLen > 0 THEN
+      tiraAssign dataSize$, LTRIM$(STR$(fixedLen))
+
+      IF symbols(vIdx).IsArray > 0 THEN
+        tiraAssign dataPtr$, ptr$
+      ELSE
+        descPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+        tiraAssign descPtr$, ptr$
+
+        tiraJmpCond "JE", descPtr$, "0", skipFileIOLbl$
+
+        tiraAssign dataPtr$, tiraGetStringData$(descPtr$)
+        tiraJmpCond "JE", dataPtr$, "0", skipFileIOLbl$
+      END IF
+    ELSE
+      tiraAssign dataSize$, LTRIM$(STR$(elemSize))
+      tiraAssign dataPtr$, ptr$
+
+      tiraJmpCond "JLE", dataSize$, "0", skipFileIOLbl$
+    END IF
+  END IF
+
+  numWrt$ = tiraDimVar$("T", TYPE_LONG)
+  numWrtPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADDRESS_OF, numWrtPtr$, numWrt$, ""
+
+  tiraCall "IAT_WRITEFILE", 5, handleVar$ + ", " + dataPtr$ + ", " + dataSize$ + ", " + numWrtPtr$ + ", 0"
+
+  tiraLabel skipFileIOLbl$
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_PUT_File = 1
+
+END FUNCTION ' parse_PUT_File
+
+''''''''''''''''''''''''
+FUNCTION parse_RANDOMIZE (startIdx)
+
+  DIM endIdx AS LONG
+  endIdx = lineTokenCount - 1
+
+  IF endIdx < startIdx + 1 THEN
+    throwCompilerError "EXPECTED NUMERIC ARGUMENT AFTER RANDOMIZE", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  argVar$ = tiraParseExpressionInt$(startIdx + 1, endIdx, ALIM, "RANDOMIZE REQUIRES NUMERIC ARGUMENT")
+  IF argVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  tiraCall "IAT_SRAND", 1, argVar$
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_RANDOMIZE = 1
+
+END FUNCTION ' parse_RANDOMIZE
+
+''''''''''''''''''''''''
+FUNCTION parse_READ (startIdx)
+
+  DIM itemStart AS LONG
+  DIM itemEnd AS LONG
+  DIM commaIdx AS LONG
+  DIM tokIdx AS LONG
+  DIM closeParen AS LONG
+  DIM vTok$, vName$
+  DIM vIdx AS LONG
+  DIM hasIndex AS LONG
+  DIM hasField AS LONG
+  DIM udtOffset AS LONG
+  DIM fieldName$
+  DIM uIdx AS LONG
+  DIM fieldFound AS LONG
+  DIM iField AS LONG
+  DIM ptr$
+  DIM targetType AS LONG
+  DIM isStrVar AS LONG
+  DIM endIdx AS LONG
+  DIM indicesStr$
+  DIM numParsedIndices AS LONG
+  DIM currUdtIndex AS LONG
+  DIM tempFieldSize AS LONG
+  DIM tempIsDynamicString AS LONG
+  DIM isFixedStr AS LONG
+  DIM fixedLen AS LONG
+
+  endIdx = lineTokenCount - 1
+
+  IF endIdx < startIdx + 1 THEN
+    throwCompilerError "READ MISSING VARIABLES", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  itemStart = startIdx + 1
+  DO WHILE itemStart <= endIdx
+    itemEnd = endIdx
+    commaIdx = findComma(itemStart, endIdx)
+    IF commaIdx > 0 THEN itemEnd = commaIdx - 1
+
+    tokIdx = itemStart
+    vTok$ = lineTokens$(tokIdx)
+    vName$ = UCASE$(vTok$)
+    ff = resolveSymbol(vName$)
+    IF ff = 0 THEN
+      tira_Cancel
+      EXIT FUNCTION
+    END IF
+    vIdx = returnedData2
+
+    IF symbols(vIdx).IsExplicit = DECL_IMPLICIT THEN
+      symbols(vIdx).IsExplicit = DECL_QUIET
+    END IF
+
+    targetType = symbols(vIdx).DataType
+
+    tokIdx = tokIdx + 1
+
+    hasIndex = 0
+    indicesStr$ = ""
+    numParsedIndices = 0
+
+    IF tokIdx <= itemEnd THEN
+      IF lineTokenVals(tokIdx) = 256 + ASC("(") THEN
+        hasIndex = 1
+        indicesStr$ = tiraParseArrayArgs$(tokIdx, itemEnd, 0)
+        IF indicesStr$ = "" AND compileError = 1 THEN EXIT FUNCTION
+        closeParen = returnedData2
+        numParsedIndices = returnedData3
+        tokIdx = closeParen + 1
+      END IF
+    END IF
+
+    IF symbols(vIdx).NumDimensions > 0 AND numParsedIndices > 0 AND numParsedIndices <> symbols(vIdx).NumDimensions THEN
+      throwCompilerError "WRONG NUMBER OF DIMENSIONS", ASIS, 0
+      EXIT FUNCTION
+    END IF
+
+    hasField = 0
+    udtOffset = 0
+    currUdtIndex = symbols(vIdx).UDTIndex
+    tempFieldSize = 0
+    tempIsDynamicString = 0
+
+    DO WHILE tokIdx <= itemEnd
+      IF lineTokenVals(tokIdx) = 256 + ASC(".") THEN
+        hasField = 1
+        tokIdx = tokIdx + 1
+        fieldName$ = UCASE$(lineTokens$(tokIdx))
+        tokIdx = tokIdx + 1
+
+        IF targetType <> TYPE_UDT THEN
+          throwCompilerErrorAndCancelTira "VARIABLE IS NOT A UDT", ASIS, 0
+          EXIT FUNCTION
+        END IF
+
+        fieldFound = 0
+        FOR iField = 0 TO udts(currUdtIndex).FieldCount - 1
+          IF RTRIM$(udtFields(currUdtIndex, iField).FieldName) = fieldName$ THEN
+            udtOffset = udtOffset + udtFields(currUdtIndex, iField).Offset
+            targetType = udtFields(currUdtIndex, iField).DataType
+            tempFieldSize = udtFields(currUdtIndex, iField).Size
+            tempIsDynamicString = udtFields(currUdtIndex, iField).IsDynamicString
+            currUdtIndex = udtFields(currUdtIndex, iField).UDTIndex
+            fieldFound = 1
+            EXIT FOR
+          END IF
+        NEXT
+
+        IF fieldFound = 0 THEN
+          throwCompilerErrorAndCancelTira "UDT FIELD NOT FOUND", ASIS, 0
+          EXIT FUNCTION
+        END IF
+      ELSE
+        EXIT DO
+      END IF
+    LOOP
+
+    ptr$ = tiraFrontendCalcAddress$(vName$, indicesStr$, udtOffset)
+    IF ptr$ = "" THEN
+      tira_Cancel
+      EXIT FUNCTION
+    END IF
+
+    isStrVar = 0
+    IF targetType = TYPE_STRING THEN isStrVar = 1
+
+    isFixedStr = 0
+    fixedLen = 0
+
+    IF isStrVar = 1 THEN
+      IF hasField = 1 THEN
+        IF tempIsDynamicString = 0 THEN
+          isFixedStr = 1
+          fixedLen = tempFieldSize
+        END IF
+      ELSE
+        fixedLen = retFixedStringLength(vIdx)
+        IF fixedLen > 0 THEN
+          isFixedStr = 1
+        END IF
+      END IF
+    END IF
+
+    IF isFixedStr = 1 THEN
+      ' Read safely into a temporary dynamic string to respect raw character constraints
+      tempDesc$ = tiraResolveHoistVar$("RDTMP", "_DESC$")
+      tiraAssign tempDesc$, "!G_SYS_EMPTY_DESC$"
+
+      tiraCall "RT_READ", 3, tempDesc$ + ", 1, " + cTrNum$(TYPE_STRING)
+
+      ' Copy raw characters seamlessly into the fixed data buffer without memory corruption
+      rhsDataPtr$ = tiraGetStringData$(tempDesc$)
+      rhsLen$ = tiraGetStringLen$(tempDesc$)
+
+      minLen$ = tiraDimVar$("T", TYPE_LONG)
+      tiraAssign minLen$, rhsLen$
+      tiraClamp minLen$, "", LTRIM$(STR$(fixedLen))
+
+      tiraMemcpy ptr$, rhsDataPtr$, minLen$
+
+      padLen$ = tiraDimVar$("T", TYPE_LONG)
+      tiraOp TC_SUB, padLen$, LTRIM$(STR$(fixedLen)), minLen$
+      skipPadLbl$ = tiraLabelCreateNew$("SKIP_PAD")
+      tiraJmpCond "JLE", padLen$, "0", skipPadLbl$
+
+      padAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+      tiraOp TC_ADD, padAddr$, ptr$, minLen$
+      tiraMemSet padAddr$, "32", padLen$
+      tiraLabel skipPadLbl$
+
+      ' Garbage collect the temporary dynamic string
+      tiraCall "RT_STR_ASSIGN", 2, tempDesc$ + ", !G_SYS_EMPTY_DESC$"
+    ELSE
+      tiraCall "RT_READ", 3, ptr$ + ", " + cTrNum$(isStrVar) + ", " + cTrNum$(targetType)
+    END IF
+
+    itemStart = itemEnd + 2
+  LOOP
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_READ = 1
+
+END FUNCTION ' parse_READ
+
+''''''''''''''''''''''''
+FUNCTION parse_RED32$ (startIdx, endIdx, allowImplicit)
+
+  DIM arg1$
+  DIM scratchName$
+  DIM resVar$
+  DIM shiftVar$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "_RED32", 3) = 0 THEN
+    parse_RED32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+
+  arg1$ = tiraParseExpressionInt$(startIdx + 2, endIdx - 1, allowImplicit, "_RED32 ARG MUST BE NUMERIC")
+  IF arg1$ = "" THEN
+    tira_Cancel
+    parse_RED32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("RED32", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_RED32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+  shiftVar$ = tiraDimVar$("T", TYPE_LONG)
+
+  tiraOp TC_SHR, shiftVar$, arg1$, "16"
+  tiraOp TC_AND, resVar$, shiftVar$, "255"
+
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_RED32$ = scratchName$
+
+END FUNCTION ' parse_RED32$
+
+''''''''''''''''''''''''
+FUNCTION parse_RESTORE (startIdx)
+
+  DIM endIdx AS LONG
+  endIdx = lineTokenCount - 1
+
+  tira_Start
+
+  IF endIdx < startIdx + 1 THEN
+    tiraAssign "!G_SYS_DATA_PTR_VAL", "0"
+  ELSE
+    lblTok$ = lineTokens$(startIdx + 1)
+    lblName$ = "%" + UCASE$(lblTok$)
+    expectedSymType = TYPE_LABEL
+    ff = resolveSymbol(lblName$)
+    IF ff = 1 THEN
+      vIdx = returnedData2
+      idxVal = symbols(vIdx).DataIndex
+      tiraAssign "!G_SYS_DATA_PTR_VAL", LTRIM$(STR$(idxVal))
+    ELSE
+      tira_Cancel
+      EXIT FUNCTION
+    END IF
+  END IF
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_RESTORE = 1
+
+END FUNCTION ' parse_RESTORE
+
+''''''''''''''''''''''''
+FUNCTION parse_RESUME (startIdx)
+
+  DIM endIdx AS LONG
+  endIdx = lineTokenCount - 1
+
+  tira_Start
+  tiraScheduleHeapReset
+  tiraNew TC_RESUME, ""
+  tira_EndAndProcess
+
+  parse_RESUME = 1
+
+END FUNCTION ' parse_RESUME
+
+''''''''''''''''''''''''
+FUNCTION parse_RGB$ (startIdx, endIdx, allowImplicit)
+
+  DIM argR$
+  DIM argG$
+  DIM argB$
+  DIM comma1 AS LONG
+  DIM comma2 AS LONG
+  DIM scratchName$
+  DIM maskR$
+  DIM maskG$
+  DIM maskB$
+  DIM idx$
+  DIM bestIdx$
+  DIM minDist$
+  DIM palDescPtr$
+  DIM palDataAddr$
+  DIM loopTop$
+  DIM loopDone$
+  DIM offsetVar$
+  DIM targetAddr$
+  DIM palB$
+  DIM palG_addr$
+  DIM palG$
+  DIM palR_addr$
+  DIM palR$
+  DIM diffR$
+  DIM diffG$
+  DIM diffB$
+  DIM sqR$
+  DIM sqG$
+  DIM sqB$
+  DIM dist$
+  DIM skipUpdate$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "_RGB", 7) = 0 THEN
+    parse_RGB$ = ""
+    EXIT FUNCTION
+  END IF
+
+  comma1 = findComma(startIdx + 2, endIdx - 1)
+  IF comma1 = 0 THEN
+    throwCompilerError "_RGB REQUIRES 3 ARGUMENTS", ASIS, 0
+    parse_RGB$ = ""
+    EXIT FUNCTION
+  END IF
+
+  comma2 = findComma(comma1 + 1, endIdx - 1)
+  IF comma2 = 0 THEN
+    throwCompilerError "_RGB REQUIRES 3 ARGUMENTS", ASIS, 0
+    parse_RGB$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+
+  argR$ = tiraParseExpressionInt$(startIdx + 2, comma1 - 1, allowImplicit, "_RGB RED ARG MUST BE NUMERIC")
+  IF argR$ = "" THEN
+    parse_RGB$ = ""
+    EXIT FUNCTION
+  END IF
+
+  argG$ = tiraParseExpressionInt$(comma1 + 1, comma2 - 1, allowImplicit, "_RGB GREEN ARG MUST BE NUMERIC")
+  IF argG$ = "" THEN
+    parse_RGB$ = ""
+    EXIT FUNCTION
+  END IF
+
+  argB$ = tiraParseExpressionInt$(comma2 + 1, endIdx - 1, allowImplicit, "_RGB BLUE ARG MUST BE NUMERIC")
+  IF argB$ = "" THEN
+    parse_RGB$ = ""
+    EXIT FUNCTION
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("RGB", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_RGB$ = ""
+    EXIT FUNCTION
+  END IF
+
+  ' Force incoming values to 0-255 limits cleanly before calculation
+  maskR$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_AND, maskR$, argR$, "255"
+
+  maskG$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_AND, maskG$, argG$, "255"
+
+  maskB$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_AND, maskB$, argB$, "255"
+
+  idx$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign idx$, "0"
+
+  bestIdx$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign bestIdx$, "0"
+
+  minDist$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign minDist$, "9999999"
+
+  ' Read directly from the internal compiler global palette block memory
+  palDescPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign palDescPtr$, "!G_GFX_PALETTE_DESC$"
+
+  palDataAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_READ_MEM, palDataAddr$ + ", " + palDescPtr$
+
+  loopTop$ = tiraLabelCreateNew$("RGB_LOOP")
+  loopDone$ = tiraLabelCreateNew$("RGB_DONE")
+
+  tiraLabel loopTop$
+  tiraJmpCond "JG", idx$, "255", loopDone$
+
+  offsetVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_MUL, offsetVar$, idx$, "4"
+
+  targetAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, targetAddr$, palDataAddr$, offsetVar$
+
+  palB$ = tiraDimVar$("T", TYPE_UBYTE)
+  tiraNew TC_READ_MEM, palB$ + ", " + targetAddr$
+
+  palG_addr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, palG_addr$, targetAddr$, "1"
+  palG$ = tiraDimVar$("T", TYPE_UBYTE)
+  tiraNew TC_READ_MEM, palG$ + ", " + palG_addr$
+
+  palR_addr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, palR_addr$, targetAddr$, "2"
+  palR$ = tiraDimVar$("T", TYPE_UBYTE)
+  tiraNew TC_READ_MEM, palR$ + ", " + palR_addr$
+
+  ' Calculate the numerical difference between the target pixel and the current index pixel
+  diffR$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_SUB, diffR$, maskR$, palR$
+
+  diffG$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_SUB, diffG$, maskG$, palG$
+
+  diffB$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_SUB, diffB$, maskB$, palB$
+
+  ' Square the differences internally to isolate purely positive vector distances
+  sqR$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_MUL, sqR$, diffR$, diffR$
+
+  sqG$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_MUL, sqG$, diffG$, diffG$
+
+  sqB$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_MUL, sqB$, diffB$, diffB$
+
+  dist$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_ADD, dist$, sqR$, sqG$
+  tiraOp TC_ADD, dist$, dist$, sqB$
+
+  ' Skip overriding the best match if this index is farther away than our currently held match
+  skipUpdate$ = tiraLabelCreateNew$("RGB_SKIP_UPD")
+  tiraJmpCond "JGE", dist$, minDist$, skipUpdate$
+  tiraAssign minDist$, dist$
+  tiraAssign bestIdx$, idx$
+
+  ' Speed optimization: If exact perfect distance hit 0 is reached, terminate scan early
+  tiraJmpCond "JE", dist$, "0", loopDone$
+  tiraLabel skipUpdate$
+
+  tiraOp TC_ADD, idx$, idx$, "1"
+  tiraJmp loopTop$
+
+  tiraLabel loopDone$
+
+  tiraAssign scratchName$, bestIdx$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_RGB$ = scratchName$
+
+END FUNCTION ' parse_RGB$
+
+''''''''''''''''''''''''
+FUNCTION parse_RGB32$ (startIdx, endIdx, allowImplicit)
+
+  DIM argR$
+  DIM argG$
+  DIM argB$
+  DIM comma1 AS LONG
+  DIM comma2 AS LONG
+  DIM scratchName$
+  DIM maskR$
+  DIM maskG$
+  DIM maskB$
+  DIM shiftG$
+  DIM shiftR$
+  DIM alphaVal$
+  DIM resVar$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "_RGB32", 7) = 0 THEN
+    parse_RGB32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  comma1 = findComma(startIdx + 2, endIdx - 1)
+  IF comma1 = 0 THEN
+    throwCompilerError "_RGB32 REQUIRES 3 ARGUMENTS", ASIS, 0
+    parse_RGB32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  comma2 = findComma(comma1 + 1, endIdx - 1)
+  IF comma2 = 0 THEN
+    throwCompilerError "_RGB32 REQUIRES 3 ARGUMENTS", ASIS, 0
+    parse_RGB32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+
+  argR$ = tiraParseExpressionInt$(startIdx + 2, comma1 - 1, allowImplicit, "_RGB32 RED ARG MUST BE NUMERIC")
+  IF argR$ = "" THEN
+    parse_RGB32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  argG$ = tiraParseExpressionInt$(comma1 + 1, comma2 - 1, allowImplicit, "_RGB32 GREEN ARG MUST BE NUMERIC")
+  IF argG$ = "" THEN
+    parse_RGB32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  argB$ = tiraParseExpressionInt$(comma2 + 1, endIdx - 1, allowImplicit, "_RGB32 BLUE ARG MUST BE NUMERIC")
+  IF argB$ = "" THEN
+    parse_RGB32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("RGB32", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_RGB32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  maskR$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_AND, maskR$, argR$, "255"
+
+  maskG$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_AND, maskG$, argG$, "255"
+
+  maskB$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_AND, maskB$, argB$, "255"
+
+  shiftG$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_SHL, shiftG$, maskG$, "8"
+
+  shiftR$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_SHL, shiftR$, maskR$, "16"
+
+  ' Default the missing alpha value safely to &HFF000000 (-16777216)
+  alphaVal$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign alphaVal$, "-16777216"
+
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_ADD, resVar$, maskB$, shiftG$
+  tiraOp TC_ADD, resVar$, resVar$, shiftR$
+  tiraOp TC_ADD, resVar$, resVar$, alphaVal$
+
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_RGB32$ = scratchName$
+
+END FUNCTION ' parse_RGB32$
+
+''''''''''''''''''''''''
+FUNCTION parse_SCREENICON (startIdx)
+
+  DIM endIdx AS LONG
+
+  endIdx = lineTokenCount - 1
+
+  IF compileHasGraphics = 0 THEN
+    throwCompilerError "_SCREENICON REQUIRES #GRAPHICS", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  ' Parse the optional handle argument if provided to ensure syntax checking
+  IF endIdx > startIdx THEN
+    argVar$ = tiraParseExpressionInt$(startIdx + 1, endIdx, ALIM, "ICON HANDLE MUST BE NUMERIC")
+    IF argVar$ = "" THEN
+      tira_Cancel
+      EXIT FUNCTION
+    END IF
+  END IF
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_SCREENICON = 1
+
+END FUNCTION ' parse_SCREENICON
+
+''''''''''''''''''''''''
+FUNCTION parse_SGN$ (startIdx, endIdx, allowImplicit)
+
+  DIM arg1$
+  DIM scratchName$
+  DIM resVar$
+  DIM lblPos$
+  DIM lblEnd$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "SGN", 3) = 0 THEN
+    parse_SGN$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+
+  arg1$ = tiraParseExpressionNumeric$(startIdx + 2, endIdx - 1, allowImplicit, "INTRINSIC REQUIRES NUMERIC")
+  IF arg1$ = "" THEN
+    parse_SGN$ = ""
+    EXIT FUNCTION
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("SGN", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_SGN$ = ""
+    EXIT FUNCTION
+  END IF
+
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign resVar$, "0"
+
+  lblPos$ = tiraLabelCreateNew$("SGN_POS")
+  lblEnd$ = tiraLabelCreateNew$("SGN_END")
+
+  ' TC_JMP_COND seamlessly handles float/integer mixed conditions safely using UCOMI
+  tiraJmpCond "JE", arg1$, "0", lblEnd$
+  tiraJmpCond "JG", arg1$, "0", lblPos$
+
+  tiraAssign resVar$, "-1"
+  tiraJmp lblEnd$
+
+  tiraLabel lblPos$
+  tiraAssign resVar$, "1"
+
+  tiraLabel lblEnd$
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_SGN$ = scratchName$
+
+END FUNCTION ' parse_SGN$
+
+''''''''''''''''''''''''
+FUNCTION parse_SHELL (startIdx)
+
+  DIM endIdx AS LONG
+  DIM hasHide AS LONG
+  DIM cmdStart AS LONG
+  DIM cmdStr$
+  DIM strDataPtr$
+  DIM hideVal$
+  DIM tokVal AS LONG
+
+  endIdx = lineTokenCount - 1
+  hasHide = 0
+  cmdStart = startIdx + 1
+
+  DO WHILE cmdStart <= endIdx
+    tokVal = lineTokenVals(cmdStart)
+
+    SELECT CASE tokVal
+
+      CASE TOK_HIDE
+        hasHide = 1
+        cmdStart = cmdStart + 1
+      CASE TOK_DONTWAIT
+        ' WinExec is asynchronous by default in our implementation, so we just consume the token
+        cmdStart = cmdStart + 1
+      CASE ELSE
+        EXIT DO
+
+    END SELECT ' tokVak
+
+  LOOP
+
+  IF cmdStart > endIdx THEN
+    throwCompilerError "EXPECTED COMMAND STRING", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_STRING
+
+  cmdStr$ = tiraParseExpression$(cmdStart, endIdx, ALIM)
+  IF cmdStr$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  IF exprIs.DataType <> TYPE_STRING THEN
+    throwCompilerErrorAndCancelTira "COMMAND MUST BE A STRING", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  ' Extract raw pointer to our seamlessly null-terminated C string in memory
+  strDataPtr$ = tiraGetStringData$(cmdStr$)
+
+  hideVal$ = tiraDimVar$("T", TYPE_LONG)
+  IF hasHide = 1 THEN
+    tiraAssign hideVal$, "0" ' SW_HIDE flag
+  ELSE
+    tiraAssign hideVal$, "1" ' SW_SHOWNORMAL flag
+  END IF
+
+  ' Call Windows API to spawn the subprocess cleanly
+  tiraCall "IAT_WINEXEC", 2, strDataPtr$ + ", " + hideVal$
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_SHELL = 1
+
+END FUNCTION ' parse_SHELL
+
+''''''''''''''''''''''''
+FUNCTION parse_SIN$ (startIdx, endIdx, allowImplicit)
+
+  DIM arg1$
+  DIM scratchName$
+  DIM resVar$
+  DIM singleRes$
+  DIM argFloat$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "SIN", 3) = 0 THEN
+    parse_SIN$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+
+  arg1$ = tiraParseExpressionNumeric$(startIdx + 2, endIdx - 1, allowImplicit, "INTRINSIC REQUIRES NUMERIC")
+  IF arg1$ = "" THEN
+    parse_SIN$ = ""
+    EXIT FUNCTION
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("SIN", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_SIN$ = ""
+    EXIT FUNCTION
+  END IF
+
+  ' Explicitly override the integer prefix rule to safely route as float
+  ff = resolveSymbol(scratchName$)
+  IF ff = 1 THEN symbols(returnedData2).DataType = TYPE_SINGLE
+
+  resVar$ = tiraDimVar$("T", TYPE_DOUBLE)
+
+  ' Coerce the argument to a double for the external IAT function
+  IF exprIs.DataType <> TYPE_DOUBLE THEN
+    argFloat$ = tiraDimVar$("T", TYPE_DOUBLE)
+    tiraAssign argFloat$, arg1$
+    arg1$ = argFloat$
+  END IF
+
+  tiraCall "IAT_SIN", 1, arg1$
+  tiraNew TC_GET_RET, resVar$
+
+  singleRes$ = tiraDimVar$("T", TYPE_SINGLE)
+  tiraOp TC_CAST, singleRes$, resVar$, LTRIM$(STR$(TYPE_SINGLE))
+
+  tiraAssign scratchName$, singleRes$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_SINGLE
+  exprIs.IsTemp = 1
+  parse_SIN$ = scratchName$
+
+END FUNCTION ' parse_SIN$
+
+''''''''''''''''''''''''
+FUNCTION parse_SPACE$ (startIdx, endIdx, allowImplicit)
+
+  DIM arg1$
+  DIM scratchName$
+  DIM skipLen$
+  DIM dataPtr$
+  DIM descPtr$
+  DIM jmpDone$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "SPACE$", 3) = 0 THEN
+    parse_SPACE$ = ""
+    EXIT FUNCTION
+  END IF
+
+  ' Sovereign command opens its own compilation block
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+  arg1$ = tiraParseExpressionInt$(startIdx + 2, endIdx - 1, allowImplicit, "SPACE$ REQUIRES NUMERIC ARGUMENT")
+  IF arg1$ = "" THEN
+    parse_SPACE$ = ""
+    EXIT FUNCTION
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("SPACE", "_DESC$")
+  IF scratchName$ = "" THEN
+    parse_SPACE$ = ""
+    EXIT FUNCTION
+  END IF
+
+  descPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign descPtr$, scratchName$
+
+  skipLen$ = tiraLabelCreateNew$("SPACE_SKIP")
+
+  tiraJmpCond "JLE", arg1$, "0", skipLen$
+
+  dataPtr$ = tiraAllocTempMem$(arg1$)
+
+  ' Memset with 32 (space character)
+  tiraMemSet dataPtr$, "32", arg1$
+
+  tiraBuildStringDescriptor descPtr$, dataPtr$, arg1$, "0"
+
+  jmpDone$ = tiraLabelCreateNew$("SPACE_DONE")
+  tiraJmp jmpDone$
+
+  tiraLabel skipLen$
+  ' Safely construct an empty descriptor entirely within the Temp Heap paradigm
+  tiraBuildStringDescriptor descPtr$, "0", "0", "0"
+  tiraLabel jmpDone$
+
+  ' Close the block (NO HEAP RESET, so the string survives for the parent!)
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_STRING
+  exprIs.IsTemp = 1
+  parse_SPACE$ = scratchName$
+
+END FUNCTION ' parse_SPACE$
+
+''''''''''''''''''''''''
+FUNCTION parse_STRINGFUNC$ (startIdx, endIdx, allowImplicit)
+
+  DIM comma1 AS LONG
+  DIM arg1$
+  DIM arg2$
+  DIM scratchName$
+  DIM descPtr$
+  DIM dataPtr$
+  DIM charByte$
+  DIM isStringChar AS LONG
+  DIM strLen$
+  DIM strData$
+  DIM lblEmpty$
+  DIM lblNotEmpty$
+  DIM lblValidCount$
+  DIM lblDoAlloc$
+  DIM lblDone$
+  DIM errStr$
+  DIM tmpByte$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "STRING$", 5) = 0 THEN
+    parse_STRINGFUNC$ = ""
+    EXIT FUNCTION
+  END IF
+
+  comma1 = findComma(startIdx + 2, endIdx - 1)
+  IF comma1 = 0 THEN
+    throwCompilerError "STRING$ REQUIRES TWO ARGUMENTS", ASIS, 0
+    parse_STRINGFUNC$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+  arg1$ = tiraParseExpressionInt$(startIdx + 2, comma1 - 1, allowImplicit, "STRING$ ARG 1 MUST BE NUMERIC")
+  IF arg1$ = "" THEN
+    tira_Cancel
+    parse_STRINGFUNC$ = ""
+    EXIT FUNCTION
+  END IF
+
+  expectedSymType = TYPE_ANY
+  arg2$ = tiraParseExpression$(comma1 + 1, endIdx - 1, allowImplicit)
+  IF arg2$ = "" THEN
+    tira_Cancel
+    parse_STRINGFUNC$ = ""
+    EXIT FUNCTION
+  END IF
+
+  isStringChar = 0
+  IF exprIs.DataType = TYPE_STRING THEN isStringChar = 1
+
+  scratchName$ = tiraResolveHoistVar$("STRF", "_DESC$")
+  IF scratchName$ = "" THEN
+    parse_STRINGFUNC$ = ""
+    EXIT FUNCTION
+  END IF
+
+  lblValidCount$ = tiraLabelCreateNew$("STRF_VCNT")
+  tiraJmpCond "JGE", arg1$, "0", lblValidCount$
+
+  errStr$ = CHR$(34) + "PROGRAM TERMINATED: ILLEGAL FUNCTION CALL IN STRING$ ON LINE " + retLineNumberStr$ + CHR$(34)
+  tiraCall "RT_PRINT_STR", 1, errStr$
+  tiraCall "RT_CRLF", 0, ""
+  tiraJmp "@END_PROGRAM"
+
+  tiraLabel lblValidCount$
+
+  charByte$ = tiraDimVar$("T", TYPE_LONG)
+
+  IF isStringChar = 1 THEN
+    strLen$ = tiraGetStringLen$(arg2$)
+
+    lblEmpty$ = tiraLabelCreateNew$("STRF_MT")
+    lblNotEmpty$ = tiraLabelCreateNew$("STRF_NMT")
+
+    tiraJmpCond "JLE", strLen$, "0", lblEmpty$
+
+    strData$ = tiraGetStringData$(arg2$)
+    tmpByte$ = tiraDimVar$("T", TYPE_UBYTE)
+    tiraNew TC_READ_MEM, tmpByte$ + ", " + strData$
+    tiraAssign charByte$, tmpByte$
+    tiraJmp lblNotEmpty$
+
+    tiraLabel lblEmpty$
+    errStr$ = CHR$(34) + "PROGRAM TERMINATED: ILLEGAL FUNCTION CALL IN STRING$ ON LINE " + retLineNumberStr$ + CHR$(34)
+    tiraCall "RT_PRINT_STR", 1, errStr$
+    tiraCall "RT_CRLF", 0, ""
+    tiraJmp "@END_PROGRAM"
+
+    tiraLabel lblNotEmpty$
+  ELSE
+    tiraOp TC_AND, charByte$, arg2$, "255"
+  END IF
+
+  lblDoAlloc$ = tiraLabelCreateNew$("STRF_ALLOC")
+  lblDone$ = tiraLabelCreateNew$("STRF_DONE")
+
+  descPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign descPtr$, scratchName$
+
+  tiraJmpCond "JG", arg1$, "0", lblDoAlloc$
+
+  tiraBuildStringDescriptor descPtr$, "0", "0", "0"
+  tiraJmp lblDone$
+
+  tiraLabel lblDoAlloc$
+  dataPtr$ = tiraAllocTempMem$(arg1$)
+
+  tiraMemSet dataPtr$, charByte$, arg1$
+
+  tiraBuildStringDescriptor descPtr$, dataPtr$, arg1$, "0"
+
+  tiraLabel lblDone$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_STRING
+  exprIs.IsTemp = 1
+  parse_STRINGFUNC$ = scratchName$
+
+END FUNCTION ' parse_STRINGFUNC$
+
+''''''''''''''''''''''''
+FUNCTION parse_TIMER$ (startIdx, endIdx, allowImplicit)
+
+  DIM scratchName$
+  DIM tickVal$
+  DIM tickDouble$
+  DIM resVar$
+  DIM singleRes$
+
+  IF startIdx <> endIdx THEN
+    throwCompilerError "MALFORMED TIMER", ASIS, 0
+    parse_TIMER$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  scratchName$ = tiraResolveHoistVar$("TIMER", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_TIMER$ = ""
+    EXIT FUNCTION
+  END IF
+
+  ' Explicitly override the integer prefix rule to safely route as float
+  ff = resolveSymbol(scratchName$)
+  IF ff = 1 THEN symbols(returnedData2).DataType = TYPE_SINGLE
+
+  tiraCall "IAT_GETTICKCOUNT", 0, ""
+
+  tickVal$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_GET_RET, tickVal$
+
+  tickDouble$ = tiraDimVar$("T", TYPE_DOUBLE)
+  tiraOp TC_CAST, tickDouble$, tickVal$, LTRIM$(STR$(TYPE_DOUBLE))
+
+  resVar$ = tiraDimVar$("T", TYPE_DOUBLE)
+  tiraOp TC_DIV, resVar$, tickDouble$, "1000.0#"
+
+  singleRes$ = tiraDimVar$("T", TYPE_SINGLE)
+  tiraOp TC_CAST, singleRes$, resVar$, LTRIM$(STR$(TYPE_SINGLE))
+
+  tiraAssign scratchName$, singleRes$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_SINGLE
+  exprIs.IsTemp = 1
+  parse_TIMER$ = scratchName$
+
+END FUNCTION ' parse_TIMER$
+
+''''''''''''''''''''''''
+FUNCTION parse_UBOUND$ (startIdx, endIdx, allowImplicit)
+
+  DIM arrNameTok$
+  DIM comma1 AS LONG
+  DIM vIdx AS LONG
+  DIM scratchName$
+  DIM dimVar$
+  DIM resVar$
+  DIM lblEnd$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "UBOUND", 3) = 0 THEN
+    parse_UBOUND$ = ""
+    EXIT FUNCTION
+  END IF
+
+  comma1 = findComma(startIdx + 2, endIdx - 1)
+
+  arrNameTok$ = UCASE$(retTokenText$(lineTokens$(startIdx + 2)))
+  ff = resolveSymbol(arrNameTok$)
+  IF ff = 0 THEN
+    parse_UBOUND$ = ""
+    EXIT FUNCTION
+  END IF
+  vIdx = returnedData2
+
+  IF symbols(vIdx).IsArray = 0 THEN
+    throwCompilerError "UBOUND REQUIRES AN ARRAY", ASIS, 0
+    parse_UBOUND$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF comma1 > 0 THEN
+    dimVar$ = tiraParseExpressionInt$(comma1 + 1, endIdx - 1, allowImplicit, "DIMENSION MUST BE NUMERIC")
+    IF dimVar$ = "" THEN
+      parse_UBOUND$ = ""
+      EXIT FUNCTION
+    END IF
+  ELSE
+    dimVar$ = "1"
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("UBOUND", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_UBOUND$ = ""
+    EXIT FUNCTION
+  END IF
+
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+
+  descAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADDRESS_OF, descAddr$, "#" + LTRIM$(STR$(vIdx)), ""
+
+  numDims$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_READ_MEM_OFFSET, numDims$ + ", " + descAddr$ + ", 12"
+
+  lblEnd$ = tiraLabelCreateNew$("UB_END")
+  tiraAssign resVar$, "0"
+  tiraJmpCond "JG", dimVar$, numDims$, lblEnd$
+  tiraJmpCond "JL", dimVar$, "1", lblEnd$
+
+  offsetVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_SUB, offsetVar$, dimVar$, "1"
+  tiraOp TC_MUL, offsetVar$, offsetVar$, "8"
+  tiraOp TC_ADD, offsetVar$, offsetVar$, "16"
+
+  dimLimitAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, dimLimitAddr$, descAddr$, offsetVar$
+
+  axVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_READ_MEM, axVar$ + ", " + dimLimitAddr$
+
+  tiraOp TC_SUB, resVar$, axVar$, "1"
+
+  tiraLabel lblEnd$
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_UBOUND$ = scratchName$
+
+END FUNCTION ' parse_UBOUND$
