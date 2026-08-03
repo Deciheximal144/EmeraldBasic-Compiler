@@ -1,0 +1,2793 @@
+' Z_EMLINF.BLB This is the external library file for EmeraldBasic
+' The line with comment, dollar sign, and INCLUDE 'Z_EMLINF.BLB' at the end of the EmeraldBasic file link this code in QB64PE
+' In EmeraldBasic, the '#INCLUDE command at the top does the work
+
+SUB checkEmergencyClose
+
+  closeBtnW = 15
+  closeBtnX = SCREENSIZEX - closeBtnW
+  closeBtnY = 0
+  closeBtnH = 13
+
+  mouseReadInput
+  IF mouseClickedInBox(closeBtnX, closeBtnY, closeBtnW, closeBtnH) THEN
+    throwCompilerError "ABORTED BY USER", ASIS, 0
+    editor.TopMenuFocus = 4
+    editor.Focus = 0
+    editor.MenuClicked = 1
+  END IF
+
+END SUB ' checkEmergencyClose
+
+''''''''''''''''''''''''
+SUB confirmExit
+
+  drawBorderBox (SCREENSIZEX \ 2) - 156, (SCREENSIZEY \ 2) - 20, 312, 40, 15, 0
+  PrintStr (SCREENSIZEX \ 2) - 148, (SCREENSIZEY \ 2) - 4, "PRESS ESC TO CONFIRM, SPACE TO CANCEL", 14, 0, 0
+  dispScreenFlushUpdate
+
+  DO
+    limitSpeed
+    mouseReadInput
+
+    kVal = keyCheck("ESC")
+    IF kVal = 27 THEN
+      ESCAPETEXT "PROGRAM ENDED"
+    END IF
+
+    kVal2 = keyCheck("SPACE")
+    IF kVal2 = 32 THEN
+      DO WHILE _KEYDOWN(32)
+        limitSpeed
+      LOOP
+      EXIT DO
+    END IF
+  LOOP
+
+END SUB ' confirmExit
+
+''''''''''''''''''''''''
+FUNCTION cTrNum$ (wNum)
+
+  cTrNum$ = LTRIM$(RTRIM$(STR$(wNum)))
+
+END FUNCTION ' cTrNum$
+
+''''''''''''''''''''''''
+SUB displayFlashText
+
+  IF flashTextTimer > 0 THEN
+    COLOR sysColor.flashTextClr
+    flashTextTimer = flashTextTimer - 1
+    PrintTextLineWithBanners flashText$, sysColor.flashTextClr, BOTTOM
+  END IF
+
+END SUB ' displayFlashText
+
+''''''''''''''''''''''''
+SUB drawBorderBox (wPosX, wPosY, wSizeX, wSizeY, fgClr, bgClr)
+
+  IF wSizeX <= 1 THEN EXIT SUB
+  IF wSizeY <= 1 THEN EXIT SUB
+
+  endX = wPosX + wSizeX - 1
+  endY = wPosY + wSizeY - 1
+
+  IF endX > SCREENSIZEX - 1 THEN endX = SCREENSIZEX - 1
+  IF endY > SCREENSIZEY - 1 THEN endY = SCREENSIZEY - 1
+
+  LINE (wPosX, wPosY)-(endX, endY), fgClr, B
+  LINE (wPosX + 1, wPosY + 1)-(endX - 1, endY - 1), bgClr, BF
+
+END SUB ' drawBorderBox
+
+''''''''''''''''''''''''
+SUB drawClearBox (wPosX, wPosY, wSizeX, wSizeY, fgClr)
+
+  IF wSizeX <= 1 THEN EXIT SUB
+  IF wSizeY <= 1 THEN EXIT SUB
+
+  endX = wPosX + wSizeX - 1
+  endY = wPosY + wSizeY - 1
+
+  IF endX > SCREENSIZEX - 1 THEN endX = SCREENSIZEX - 1
+  IF endY > SCREENSIZEY - 1 THEN endY = SCREENSIZEY - 1
+
+  LINE (wPosX, wPosY)-(endX, endY), fgClr, B
+
+END SUB ' drawClearBox
+
+''''''''''''''''''''''''
+SUB drawEditorPMI
+
+  editorBoxTop = editor.StartY
+  editorBoxY = editorBoxTop + 3
+
+  editorTextX = EDITOR_BOX_X + LEFT_SPACING
+  editorTextW = 56 * 8
+
+  rowH = 8 + TEXT_GAP_TOP + TEXT_GAP_BOT
+  textRows = 29
+  textH = textRows * rowH
+  editorBoxH = textH + 3
+
+  editorScrollBarX = editorTextX + editorTextW + 3
+  editorScrollBarY = editorBoxTop
+  editorScrollBarW = 10
+
+  hScrollY = editorBoxY + textH
+  hScrollX = 1
+  hScrollW = editorScrollBarX - hScrollX
+
+  IF editor.Focus = 1 THEN
+    focusX = 0
+    focusY = editorBoxTop - 1
+    focusW = (editorScrollBarX + editorScrollBarW + 1) - focusX
+    focusH = (editorBoxH + 8) + 2
+    drawClearBox focusX, focusY, focusW, focusH, sysColor.focusBorder
+  END IF
+
+  newBoxX = 1
+  newBoxW = (editorScrollBarX + editorScrollBarW) - newBoxX
+  drawBorderBox newBoxX, editorBoxTop, newBoxW, editorBoxH + 9, 15, 0
+
+  LINE (EDITOR_BOX_X, editorBoxTop)-(EDITOR_BOX_X, editorBoxTop + editorBoxH + 8), 15
+
+  IF editor.Focus = 1 THEN
+    LINE (EDITOR_BOX_X - 1, editorBoxTop + 1)-(EDITOR_BOX_X - 1, hScrollY - 1), sysColor.focusBorder
+  END IF
+
+  ' Draw Horizontal Scrollbar
+  drawBorderBox hScrollX, hScrollY, hScrollW, 9, 15, 0
+
+  drawBorderBox hScrollX, hScrollY, 10, 9, 15, 0
+  drawBorderBox hScrollX + hScrollW - 9, hScrollY, 10, 9, 15, 0
+
+  PrintChr hScrollX + 2, hScrollY + 1, CHR$(17), 15, 0, 1
+  PrintChr hScrollX + hScrollW - 8, hScrollY + 1, CHR$(16), 15, 0, 1
+
+  ' Calculate maxLen for horizontal scrolling incrementally to prevent severe framerate drops on large programs
+  STATIC scanIdx AS LONG
+  STATIC cachedMaxLen AS LONG
+  STATIC tempMaxLen AS LONG
+
+  maxLen = 0
+  scanEnd = editor.ScrollY + textRows
+  IF scanEnd > editor.LastLine THEN scanEnd = editor.LastLine
+
+  ' 1. Always evaluate the visible window immediately so current edits update the scrollbar instantly
+  FOR iy = editor.ScrollY TO scanEnd
+    i2 = LEN(editorText$(iy))
+    IF i2 > maxLen THEN maxLen = i2
+  NEXT
+
+  ' 2. Evaluate the rest of the file in the background (1000 lines per frame)
+  FOR stepIdx = 1 TO 1000
+    scanIdx = scanIdx + 1
+    IF scanIdx > editor.LastLine THEN
+      cachedMaxLen = tempMaxLen
+      tempMaxLen = 0
+      scanIdx = 1
+    END IF
+    i2 = LEN(editorText$(scanIdx))
+    IF i2 > tempMaxLen THEN tempMaxLen = i2
+  NEXT
+
+  IF cachedMaxLen > maxLen THEN maxLen = cachedMaxLen
+  IF tempMaxLen > maxLen THEN maxLen = tempMaxLen
+
+  maxScrollX = maxLen - 56 + 2
+  IF maxScrollX < 0 THEN maxScrollX = 0
+  IF editor.ScrollX > maxScrollX THEN editor.ScrollX = maxScrollX
+
+  ' Draw H-Scroll thumb
+  thumbWEd = hScrollW - 19
+  IF maxScrollX = 0 THEN
+    thumbSizeX = thumbWEd
+    thumbXEd = hScrollX + 10
+  ELSE
+    thumbSizeX = (56 * thumbWEd) \ (maxLen + 2)
+    IF thumbSizeX < 10 THEN thumbSizeX = 10
+    thumbXEd = hScrollX + 10 + ((editor.ScrollX * (thumbWEd - thumbSizeX)) \ maxScrollX)
+  END IF
+  drawBorderBox thumbXEd, hScrollY + 1, thumbSizeX, 7, 2, 15
+
+  FOR iy = 0 TO textRows - 1
+    actualY = iy + editor.ScrollY
+    lineNum = actualY
+    numStr$ = LTRIM$(RTRIM$(STR$(lineNum)))
+    numPosX = (EDITOR_BOX_X - 4) - (LEN(numStr$) * 8) ' Leaves exactly 4 pixels to of gap between the left white line and the text
+
+    IF actualY = editor.CursorY THEN
+      lineColor = 15
+    ELSE
+      lineColor = 11
+    END IF
+
+    PrintStr numPosX, editorBoxY + (iy * rowH) + TEXT_GAP_TOP, numStr$, lineColor, 0, 1
+
+    IF editor.IsSelecting = 1 THEN
+      IF editor.SelectStartY < editor.CursorY OR (editor.SelectStartY = editor.CursorY AND editor.SelectStartX < editor.CursorX) THEN
+        startY = editor.SelectStartY
+        startX = editor.SelectStartX
+        endY = editor.CursorY
+        endX = editor.CursorX
+      ELSE
+        startY = editor.CursorY
+        startX = editor.CursorX
+        endY = editor.SelectStartY
+        endX = editor.SelectStartX
+      END IF
+
+      IF actualY >= startY AND actualY <= endY THEN
+        lineLen = LEN(editorText$(actualY))
+        hlStartX = 0
+        hlEndX = lineLen
+
+        IF actualY = startY THEN hlStartX = startX
+        IF actualY = endY THEN hlEndX = endX
+        IF actualY < endY THEN hlEndX = lineLen + 1
+
+        hlStartX = hlStartX - editor.ScrollX
+        hlEndX = hlEndX - editor.ScrollX
+
+        IF hlStartX < 0 THEN hlStartX = 0
+        IF hlEndX > 56 THEN hlEndX = 56
+
+        IF hlStartX < hlEndX THEN
+          LINE (editorTextX + (hlStartX * 8), editorBoxY + (iy * rowH))-(editorTextX + (hlEndX * 8) - 1, editorBoxY + (iy * rowH) + rowH - 1), 1, BF
+        END IF
+      END IF
+    END IF
+
+    IF actualY <= EDITOR_LINE_MAX THEN
+      IF editorText$(actualY) <> "" THEN
+        printText$ = MID$(editorText$(actualY), editor.ScrollX + 1, 56)
+        PrintStr editorTextX, editorBoxY + (iy * rowH) + TEXT_GAP_TOP, printText$, 15, 0, 1
+      END IF
+    END IF
+  NEXT
+
+  IF editor.Focus = 1 THEN
+    IF editor.CursorY >= editor.ScrollY AND editor.CursorY < editor.ScrollY + textRows THEN
+      IF editor.CursorX >= editor.ScrollX AND editor.CursorX < editor.ScrollX + 56 THEN
+        cursorPixelX = editorTextX + ((editor.CursorX - editor.ScrollX) * 8)
+        cursorPixelY = editorBoxY + ((editor.CursorY - editor.ScrollY) * rowH) + TEXT_GAP_TOP
+
+        cursorBlink = INT(TIMER * 2) AND 1
+        IF cursorBlink = 1 THEN
+          PrintChr cursorPixelX, cursorPixelY, "*", 14, 0, 1
+        ELSE
+          PrintChr cursorPixelX, cursorPixelY, "_", 14, 0, 1
+        END IF
+      END IF
+    END IF
+  END IF
+
+  ' Mouse Processing Logic
+  lastLine = editor.LastLine
+  IF editor.CursorY > lastLine THEN lastLine = editor.CursorY
+
+  IF mouse.Wheel <> 0 THEN
+    IF mouseWithinBoxBounds(editorTextX, editorBoxTop, editorTextW + editorScrollBarW + 4, editorBoxH + 9) THEN
+      editor.Focus = 1
+      editor.ScrollY = editor.ScrollY + mouse.Wheel
+      maxScroll = lastLine - 28
+      IF maxScroll < 1 THEN maxScroll = 1
+      IF editor.ScrollY > maxScroll THEN editor.ScrollY = maxScroll
+      IF editor.ScrollY < 1 THEN editor.ScrollY = 1
+    END IF
+  END IF
+
+  IF mouse.Clicked1 THEN
+    lastActionWasTyping = 0
+    editor.DragActive = 0
+    editor.ScrollDragActiveX = 0
+
+    IF mouseWithinBoxBounds(editorTextX, editorBoxY, editorTextW, textH) THEN
+      editor.DragActive = 1
+      editor.Focus = 1
+      clickRelX = mouse.PosX - editorTextX
+      clickRelY = mouse.PosY - editorBoxY
+      newCX = (clickRelX \ 8) + editor.ScrollX
+      newCY = (clickRelY \ rowH) + editor.ScrollY
+
+      IF newCY <> editor.CursorY THEN
+        refineCode editor.CursorY, 0
+      END IF
+
+      IF newCY > lastLine THEN newCY = lastLine
+
+      lineLength = LEN(editorText$(newCY))
+      IF newCX > lineLength THEN newCX = lineLength
+
+      IF _KEYDOWN(100303) OR _KEYDOWN(100304) THEN
+        IF editor.IsSelecting = 0 THEN
+          editor.SelectStartX = editor.CursorX
+          editor.SelectStartY = editor.CursorY
+          editor.IsSelecting = 1
+        END IF
+        editor.CursorX = newCX
+        editor.CursorY = newCY
+      ELSE
+        IF editor.TextClickActive = 1 AND (TIMER - editor.TextLastClickTime) < 0.3 THEN
+          editor.TextClickActive = 0 ' Reset to prevent triple-click looping
+          editor.DragActive = 0 ' Disable drag logic to prevent immediate overwrite of the right-bound selection
+
+          lineStr$ = editorText$(newCY)
+          lineLen = LEN(lineStr$)
+
+          IF lineLen > 0 THEN
+            clickPos = newCX + 1
+            IF clickPos > lineLen THEN clickPos = lineLen
+
+            ch$ = MID$(lineStr$, clickPos, 1)
+            cType = 3
+            IF ch$ = " " OR ch$ = CHR$(9) THEN
+              cType = 1
+            ELSE
+              IF INSTR("(),=+-*/\" + CHR$(34) + ":<>';[]{}", ch$) > 0 THEN
+                cType = 2
+              END IF
+            END IF
+
+            leftBound = clickPos - 1
+            DO WHILE leftBound > 0
+              ch$ = MID$(lineStr$, leftBound, 1)
+              lType = 3
+              IF ch$ = " " OR ch$ = CHR$(9) THEN
+                lType = 1
+              ELSE
+                IF INSTR("(),=+-*/\" + CHR$(34) + ":<>';[]{}", ch$) > 0 THEN
+                  lType = 2
+                END IF
+              END IF
+              IF lType <> cType THEN EXIT DO
+              leftBound = leftBound - 1
+            LOOP
+
+            rightBound = clickPos + 1
+            DO WHILE rightBound <= lineLen
+              ch$ = MID$(lineStr$, rightBound, 1)
+              rType = 3
+              IF ch$ = " " OR ch$ = CHR$(9) THEN
+                rType = 1
+              ELSE
+                IF INSTR("(),=+-*/\" + CHR$(34) + ":<>';[]{}", ch$) > 0 THEN
+                  rType = 2
+                END IF
+              END IF
+              IF rType <> cType THEN EXIT DO
+              rightBound = rightBound + 1
+            LOOP
+
+            editor.SelectStartX = leftBound
+            editor.SelectStartY = newCY
+            editor.CursorX = rightBound - 1
+            editor.CursorY = newCY
+            editor.IsSelecting = 1
+          ELSE
+            editor.SelectStartX = newCX
+            editor.SelectStartY = newCY
+            editor.IsSelecting = 0
+            editor.CursorX = newCX
+            editor.CursorY = newCY
+          END IF
+        ELSE
+          editor.TextLastClickTime = TIMER
+          editor.TextClickActive = 1
+          editor.SelectStartX = newCX
+          editor.SelectStartY = newCY
+          editor.IsSelecting = 0
+          editor.CursorX = newCX
+          editor.CursorY = newCY
+        END IF
+      END IF
+    END IF
+
+    IF mouseWithinBoxBounds(0, editorBoxY, editorTextX, textH) THEN
+      editor.DragActive = 1
+      editor.Focus = 1
+      clickRelY = mouse.PosY - editorBoxY
+      newCY = (clickRelY \ rowH) + editor.ScrollY
+
+      IF newCY <> editor.CursorY THEN
+        refineCode editor.CursorY, 0
+      END IF
+
+      IF newCY > lastLine THEN newCY = lastLine
+      IF newCY < 1 THEN newCY = 1
+
+      editor.CursorX = 0
+      editor.CursorY = newCY
+      editor.SelectStartX = 0
+      editor.SelectStartY = newCY
+      editor.IsSelecting = 0
+    END IF
+
+    IF mouseWithinBoxBounds(hScrollX, hScrollY, hScrollW, 9) THEN
+      editor.Focus = 1
+      IF mouseWithinBoxBounds(thumbXEd, hScrollY, thumbSizeX, 9) THEN
+        editor.ScrollDragActiveX = 1
+        editor.ScrollDragOffsetX = mouse.PosX - thumbXEd
+      ELSE
+        IF mouseWithinBoxBounds(hScrollX, hScrollY, 10, 9) THEN
+          editor.ScrollX = editor.ScrollX - 1
+          IF editor.ScrollX < 0 THEN editor.ScrollX = 0
+        ELSE
+          IF mouseWithinBoxBounds(hScrollX + hScrollW - 9, hScrollY, 10, 9) THEN
+            editor.ScrollX = editor.ScrollX + 1
+            IF editor.ScrollX > maxScrollX THEN editor.ScrollX = maxScrollX
+          ELSE
+            IF mouse.PosX < thumbXEd THEN
+              editor.ScrollX = editor.ScrollX - 10
+              IF editor.ScrollX < 0 THEN editor.ScrollX = 0
+            ELSE
+              editor.ScrollX = editor.ScrollX + 10
+              IF editor.ScrollX > maxScrollX THEN editor.ScrollX = maxScrollX
+            END IF
+          END IF
+        END IF
+      END IF
+    END IF
+  END IF
+
+  IF mouse.Button1Down AND mouse.Clicked1 = 0 THEN
+    IF editor.Focus = 1 AND editor.DragActive = 1 THEN
+      clickRelX = mouse.PosX - editorTextX
+      clickRelY = mouse.PosY - editorBoxY
+      newCX = (clickRelX \ 8) + editor.ScrollX
+      newCY = (clickRelY \ rowH) + editor.ScrollY
+
+      maxScroll = lastLine - 28
+      IF maxScroll < 1 THEN maxScroll = 1
+
+      IF mouse.PosY < editorBoxY THEN
+        newCY = editor.ScrollY - 1
+        IF newCY < 1 THEN newCY = 1
+        editor.ScrollY = newCY
+      END IF
+      IF mouse.PosY >= editorBoxY + textH THEN
+        newCY = editor.ScrollY + textRows
+        editor.ScrollY = editor.ScrollY + 1
+        IF editor.ScrollY > maxScroll THEN editor.ScrollY = maxScroll
+      END IF
+
+      IF mouse.PosX < editorTextX THEN
+        newCX = editor.ScrollX - 1
+        IF newCX < 0 THEN newCX = 0
+        editor.ScrollX = newCX
+      END IF
+      IF mouse.PosX >= editorTextX + editorTextW THEN
+        newCX = editor.ScrollX + 56
+        editor.ScrollX = editor.ScrollX + 1
+        IF editor.ScrollX > maxScrollX THEN editor.ScrollX = maxScrollX
+      END IF
+
+      IF newCY < 1 THEN newCY = 1
+      IF newCY > lastLine THEN newCY = lastLine
+
+      lineLength = LEN(editorText$(newCY))
+      IF newCX > lineLength THEN newCX = lineLength
+      IF newCX < 0 THEN newCX = 0
+
+      IF newCX <> editor.CursorX OR newCY <> editor.CursorY THEN
+        editor.IsSelecting = 1
+        editor.CursorX = newCX
+        editor.CursorY = newCY
+      END IF
+    END IF
+  END IF
+
+  IF mouse.Button1Down AND editor.ScrollDragActiveX = 1 THEN
+    IF maxScrollX > 0 THEN
+      newThumbX = mouse.PosX - editor.ScrollDragOffsetX
+      trackSizeX = thumbWEd - thumbSizeX
+      IF trackSizeX > 0 THEN
+        newScrollX = ((newThumbX - (hScrollX + 10)) * maxScrollX) \ trackSizeX
+        IF newScrollX < 0 THEN newScrollX = 0
+        IF newScrollX > maxScrollX THEN newScrollX = maxScrollX
+        editor.ScrollX = newScrollX
+      END IF
+    END IF
+  END IF
+
+  IF mouse.Released1 THEN
+    editor.DragActive = 0
+    editor.ScrollDragActiveX = 0
+  END IF
+
+  IF mouse.Released2 THEN
+    IF mouseWithinBoxBounds(editorTextX, editorBoxY, editorTextW, textH) AND mouseDown2WithinBoxBounds(editorTextX, editorBoxY, editorTextW, textH) THEN
+      editor.MenuMode = 1
+    END IF
+  END IF
+
+END SUB ' drawEditorPMI
+
+SUB drawStatusPMI
+
+  editorBoxTop = editor.StartY
+  editorBoxY = editorBoxTop + 3
+
+  editorTextX = EDITOR_BOX_X + LEFT_SPACING
+  editorTextW = 56 * 8
+
+  rowH = 8 + TEXT_GAP_TOP + TEXT_GAP_BOT
+  textRows = 29
+  textH = textRows * rowH
+  editorBoxH = textH + 3
+
+  statusBoxX = 1
+  statusBoxY = editorBoxY + editorBoxH + 9
+  statusBoxW = editorTextX + editorTextW + 3
+  statusBoxH = 38
+
+  scrollBarX = statusBoxX + statusBoxW - 1
+  scrollBarY = statusBoxY
+  scrollBarW = 10
+  scrollBarH = statusBoxH
+
+  IF editor.Focus = 2 THEN
+    sFocusX = statusBoxX - 1
+    sFocusY = statusBoxY - 1
+    sFocusW = (scrollBarX + scrollBarW + 1) - sFocusX
+    sFocusH = statusBoxH + 2
+    drawClearBox sFocusX, sFocusY, sFocusW, sFocusH, sysColor.focusBorder
+  END IF
+
+  drawBorderBox statusBoxX, statusBoxY, statusBoxW, statusBoxH, 15, 0
+
+  maxLines = (statusBoxH - 5) \ 11
+
+  processVScrollbar SCROLL_STATUS, scrollBarX, scrollBarY, scrollBarW, scrollBarH, (statusMsgCount - 1), maxLines, 1
+
+  hlStart = editor.StatusSelectedIndex
+  hlEnd = editor.StatusSelectedIndex
+  IF hlStart > 0 THEN
+    sLine = statusMsg(hlStart).CodeLine
+    IF sLine > 0 THEN
+      DO WHILE hlStart > 1
+        IF statusMsg(hlStart - 1).CodeLine = sLine THEN
+          IF LEFT$(statusMsg(hlStart).Text, 5) = "ERROR" OR LEFT$(statusMsg(hlStart).Text, 7) = "WARNING" THEN EXIT DO
+          hlStart = hlStart - 1
+        ELSE
+          EXIT DO
+        END IF
+      LOOP
+      DO WHILE hlEnd < statusMsgCount - 1
+        IF statusMsg(hlEnd + 1).CodeLine = sLine THEN
+          IF LEFT$(statusMsg(hlEnd + 1).Text, 5) = "ERROR" OR LEFT$(statusMsg(hlEnd + 1).Text, 7) = "WARNING" THEN EXIT DO
+          hlEnd = hlEnd + 1
+        ELSE
+          EXIT DO
+        END IF
+      LOOP
+    END IF
+  END IF
+
+  lineY = statusBoxY + 4
+  linesDrawn = 0
+  FOR ii = editor.StatusScrollY TO statusMsgCount - 1
+    IF linesDrawn >= maxLines THEN EXIT FOR
+
+    isHighlighted = 0
+    IF (editor.Focus = 2 OR editor.MenuMode = 2) AND editor.StatusSelectedIndex > 0 THEN
+      IF ii >= hlStart AND ii <= hlEnd THEN isHighlighted = 1
+    END IF
+
+    IF isHighlighted = 1 THEN
+      LINE (statusBoxX + 1, lineY - 1)-(scrollBarX - 1, lineY + 9), 1, BF
+      PrintStr statusBoxX + LEFT_SPACING, lineY, statusMsg(ii).Text, 15, 0, 1
+    ELSE
+      PrintStr statusBoxX + LEFT_SPACING, lineY, statusMsg(ii).Text, 14, 0, 1
+    END IF
+
+    lineY = lineY + 11
+    linesDrawn = linesDrawn + 1
+  NEXT
+
+  ' Mouse Processing Logic
+  IF mouse.Wheel <> 0 THEN
+    IF mouseWithinBoxBounds(statusBoxX, statusBoxY, statusBoxW + scrollBarW, statusBoxH) THEN
+      editor.Focus = 2
+      editor.StatusScrollY = editor.StatusScrollY + mouse.Wheel
+      IF (statusMsgCount - 1) > maxLines THEN
+        IF editor.StatusScrollY > statusMsgCount - maxLines THEN editor.StatusScrollY = statusMsgCount - maxLines
+      ELSE
+        editor.StatusScrollY = 1
+      END IF
+      IF editor.StatusScrollY < 1 THEN editor.StatusScrollY = 1
+    END IF
+  END IF
+
+  IF mouse.Clicked1 THEN
+    IF mouseWithinBoxBounds(statusBoxX, statusBoxY, statusBoxW + scrollBarW, statusBoxH) THEN
+      editor.Focus = 2
+    END IF
+  END IF
+
+  IF mouse.Released1 THEN
+    IF mouseClickedInBox(statusBoxX, statusBoxY, statusBoxW, statusBoxH) THEN
+      clickRelY = mouse.PosY - (statusBoxY + 3)
+      IF clickRelY < 0 THEN clickRelY = 0
+      clickedRow = clickRelY \ 11
+      IF clickedRow >= 0 AND clickedRow < maxLines THEN
+        msgIdx = editor.StatusScrollY + clickedRow
+        IF msgIdx > 0 AND msgIdx < statusMsgCount THEN
+          editor.StatusSelectedIndex = msgIdx
+
+          errLine = statusMsg(msgIdx).CodeLine
+          IF errLine > 0 THEN
+            editor.CursorY = errLine
+            editor.CursorX = 0
+            editor.ScrollY = errLine - 14
+            IF editor.ScrollY < 1 THEN editor.ScrollY = 1
+            editor.ScrollX = 0
+            editor.SelectStartX = 0
+            editor.SelectStartY = errLine
+            editor.IsSelecting = 0
+            editor.Focus = 1
+          END IF
+        ELSE
+          editor.StatusSelectedIndex = 0
+        END IF
+      ELSE
+        editor.StatusSelectedIndex = 0
+      END IF
+    END IF
+  END IF
+
+  IF mouse.Released2 THEN
+    IF mouseWithinBoxBounds(statusBoxX, statusBoxY, statusBoxW + scrollBarW, statusBoxH) THEN
+      IF mouseDown2WithinBoxBounds(statusBoxX, statusBoxY, statusBoxW + scrollBarW, statusBoxH) THEN
+        clickRelY = mouse.PosY - (statusBoxY + 3)
+        IF clickRelY < 0 THEN clickRelY = 0
+        clickedRow = clickRelY \ 11
+        IF clickedRow >= 0 AND clickedRow < maxLines THEN
+          msgIdx = editor.StatusScrollY + clickedRow
+          IF msgIdx > 0 AND msgIdx < statusMsgCount THEN
+            editor.StatusSelectedIndex = msgIdx
+            editor.Focus = 2
+            editor.MenuMode = 2
+          END IF
+        END IF
+      END IF
+    END IF
+  END IF
+
+END SUB ' drawStatusPMI
+
+''''''''''''''''''''''''
+SUB drawTopMenuAndScrollPMI
+
+  editorBoxTop = editor.StartY
+  editorBoxY = editorBoxTop + 3
+
+  editorTextX = EDITOR_BOX_X + LEFT_SPACING
+  editorTextW = 56 * 8
+
+  rowH = 8 + TEXT_GAP_TOP + TEXT_GAP_BOT
+  textRows = 29
+  textH = textRows * rowH
+  editorBoxH = textH + 3
+
+  editorScrollBarX = editorTextX + editorTextW + 3
+  editorScrollBarY = editorBoxTop
+  editorScrollBarW = 10
+  editorScrollBarH = textH + 4
+
+  hScrollY = editorBoxY + textH
+
+  ' Draw Top Menu Background
+  LINE (0, 0)-(SCREENSIZEX - 1, 12), editor.windowBarClr, BF
+
+  activeName$ = ""
+  IF uiSubCount > 0 THEN
+    FOR ii = 0 TO uiSubCount - 1
+      startLine = uiSubLine(ii)
+      endLine = editor.LastLine
+      IF ii + 1 < uiSubCount THEN
+        endLine = uiSubLine(ii + 1) - 1
+      END IF
+
+      IF editor.CursorY >= startLine AND editor.CursorY <= endLine THEN
+        activeName$ = uiSubName$(ii)
+        EXIT FOR
+      END IF
+    NEXT
+  END IF
+
+  IF activeName$ <> "" THEN
+    namePixelWidth = LEN(activeName$) * 8
+    nameCenterX = (SCREENSIZEX \ 2) - (namePixelWidth \ 2)
+    PrintStr nameCenterX, 3, activeName$, 15, 0, 1
+  END IF
+
+  DIM fileMenu$(3)
+  fileMenu$(0) = "OPEN"
+  fileMenu$(1) = "SAVE AS"
+  fileMenu$(2) = "NEW"
+  fileMenu$(3) = "IMPORT"
+
+  IF editor.TopMenuFocus = MENU_FILE THEN
+    drawClearBox 4, 1, 34, 11, 9
+    PrintStr 6, 3, "FILE", 15, 0, 1
+
+    ff = processDropdownMenu(4, 12, 4, fileMenu$())
+    IF ff = 1 THEN
+      clickedIdx = returnedData2
+    END IF
+
+    curExt$ = ".BAS"
+    IF editor.FileExtensionMode = FILE_EXT_TXT THEN curExt$ = ".TXT"
+    IF editor.FileExtensionMode = FILE_EXT_BLB THEN curExt$ = ".BLB"
+
+    fnBoxX = 75
+    fnBoxY = 12
+    fnBoxW = 17 + (LEN(fileNameBase$ + curExt$) * 8)
+    fnBoxH = 17
+
+    LINE (fnBoxX, fnBoxY + 1)-(fnBoxX + fnBoxW - 2, fnBoxY + fnBoxH - 2), editor.windowBarClr, BF
+    LINE (fnBoxX, fnBoxY)-(fnBoxX + fnBoxW - 1, fnBoxY), 15
+    LINE (fnBoxX + fnBoxW - 1, fnBoxY)-(fnBoxX + fnBoxW - 1, fnBoxY + fnBoxH - 1), 15
+    LINE (fnBoxX, fnBoxY + fnBoxH - 1)-(fnBoxX + fnBoxW - 1, fnBoxY + fnBoxH - 1), 15
+
+    PrintStr 84, 17, fileNameBase$ + curExt$, 11, 0, 1
+
+    IF ff = 1 THEN
+      IF clickedIdx = 0 THEN
+        editor.TopMenuFocus = 0
+        modalFileMenuOpen
+      END IF
+      IF clickedIdx = 1 THEN
+        editor.TopMenuFocus = 0
+        modalFileMenuSave
+      END IF
+      IF clickedIdx = 2 THEN
+        editor.TopMenuFocus = 0
+        modalFileMenuNew
+      END IF
+      IF clickedIdx = 3 THEN
+        editor.TopMenuFocus = 0
+        modalImportFileMenu
+      END IF
+    END IF
+  ELSE
+    PrintStr 6, 3, "FILE", 15, 0, 1
+  END IF
+
+  DIM editMenu$(0)
+  IF undoState.Ready = 1 THEN
+    editMenu$(0) = "UNDO"
+  ELSE
+    editMenu$(0) = "~UNDO"
+  END IF
+
+  IF editor.TopMenuFocus = MENU_EDIT THEN
+    drawClearBox 44, 1, 34, 11, 9
+    PrintStr 46, 3, "EDIT", 15, 0, 1
+
+    ff = processDropdownMenu(44, 12, 1, editMenu$())
+    IF ff = 1 THEN
+      clickedIdx = returnedData2
+      IF clickedIdx = 0 THEN
+        editor.TopMenuFocus = 0
+        undo_StateRestore
+      END IF
+    END IF
+  ELSE
+    PrintStr 46, 3, "EDIT", 15, 0, 1
+  END IF
+
+  DIM viewMenu$(1)
+  IF uiSubCount > 0 THEN
+    viewMenu$(0) = "VIEW SUBS"
+  ELSE
+    viewMenu$(0) = "~VIEW SUBS"
+  END IF
+  viewMenu$(1) = "GO TO LINE"
+
+  IF editor.TopMenuFocus = MENU_VIEW THEN
+    drawClearBox 84, 1, 34, 11, 9
+    PrintStr 86, 3, "VIEW", 15, 0, 1
+
+    ff = processDropdownMenu(84, 12, 2, viewMenu$())
+    IF ff = 1 THEN
+      clickedIdx = returnedData2
+      IF clickedIdx = 0 THEN
+        editor.TopMenuFocus = 0
+        modalViewSubs
+      END IF
+      IF clickedIdx = 1 THEN
+        editor.TopMenuFocus = 0
+        modalGoToLine
+      END IF
+    END IF
+  ELSE
+    PrintStr 86, 3, "VIEW", 15, 0, 1
+  END IF
+
+  hasCode = 0
+  IF editor.LastLine > 1 THEN
+    hasCode = 1
+  ELSE
+    IF LTRIM$(RTRIM$(editorText$(1))) <> "" THEN hasCode = 1
+  END IF
+
+  DIM toolMenu$(0)
+  IF hasCode = 1 AND compileState = COMP_IDLE THEN
+    toolMenu$(0) = "COMPILE"
+  ELSE
+    toolMenu$(0) = "~COMPILE"
+  END IF
+
+  IF editor.TopMenuFocus = MENU_TOOL THEN
+    drawClearBox 124, 1, 34, 11, 9
+    PrintStr 126, 3, "TOOL", 15, 0, 1
+
+    ff = processDropdownMenu(124, 12, 1, toolMenu$())
+    IF ff = 1 THEN
+      clickedIdx = returnedData2
+      IF clickedIdx = 0 THEN
+        editor.TopMenuFocus = 0
+
+        IF compileState = COMP_IDLE AND hasCode = 1 THEN
+          compileState = COMP_REFINE
+          addStatusMsg "REFINING..."
+          redrawAll
+          dispScreenFlushUpdate
+
+          statusMsgCount = 1
+          editor.StatusScrollY = 1
+          editor.StatusSelectedIndex = 0
+          FOR ii = 1 TO 999
+            statusMsg(ii).Text = ""
+            statusMsg(ii).CodeLine = 0
+          NEXT
+
+          wFln$ = fileNameBase$ + ".exe"
+          IF _FILEEXISTS(wFln$) THEN
+            delCmd$ = "cmd /c del /F /Q " + CHR$(34) + wFln$ + CHR$(34)
+            SHELL _HIDE delCmd$
+
+            IF _FILEEXISTS(wFln$) THEN
+              addStatusMsg "OUTPUT FILE IN USE, PAUSING"
+              redrawAll
+              dispScreenFlushUpdate
+              waitTimer 1.5
+            END IF
+          END IF
+        END IF
+      END IF
+    END IF
+  ELSE
+    PrintStr 126, 3, "TOOL", 15, 0, 1
+  END IF
+
+  lastLine = editor.LastLine
+  IF editor.CursorY > lastLine THEN lastLine = editor.CursorY
+
+  processVScrollbar SCROLL_MAIN, editorScrollBarX, editorScrollBarY, editorScrollBarW, editorScrollBarH, lastLine, textRows, 1
+
+  ' Draw Corner Box
+  drawBorderBox editorScrollBarX, hScrollY, editorScrollBarW, 9, 15, 0
+
+  ' Mouse Processing Logic
+  IF mouse.Clicked1 THEN
+    IF mouseWithinBoxBounds(editorScrollBarX, editorScrollBarY, editorScrollBarW, editorScrollBarH) THEN
+      editor.Focus = 1
+    END IF
+
+    IF mouseWithinBoxBounds(editorScrollBarX, hScrollY, editorScrollBarW, 9) THEN
+      editor.Focus = 1
+      IF editor.CornerClickActive = 1 AND (TIMER - editor.CornerLastClickTime) < 0.25 THEN
+        ' Double-click detected
+        lastLine = editor.LastLine
+        IF editor.CursorY > lastLine THEN lastLine = editor.CursorY
+
+        maxScroll = lastLine - 28
+        IF maxScroll < 1 THEN maxScroll = 1
+
+        editor.ScrollY = maxScroll
+        editor.CursorY = lastLine
+        editor.CursorX = 0
+        editor.CornerClickActive = 0 ' Reset for next double-click
+      ELSE
+        ' Single-click, set timer
+        editor.CornerLastClickTime = TIMER
+        editor.CornerClickActive = 1
+      END IF
+    END IF
+  END IF
+
+  IF mouse.Released1 THEN
+    IF mouseClickedInBox(4, 0, 32, 13) THEN
+      IF editor.TopMenuFocus = MENU_FILE THEN
+        editor.TopMenuFocus = 0
+      ELSE
+        editor.TopMenuFocus = MENU_FILE
+        editor.Focus = 0
+      END IF
+      editor.MenuClicked = 1
+    END IF
+
+    IF mouseClickedInBox(44, 0, 32, 13) THEN
+      IF editor.TopMenuFocus = MENU_EDIT THEN
+        editor.TopMenuFocus = 0
+      ELSE
+        editor.TopMenuFocus = MENU_EDIT
+        editor.Focus = 0
+      END IF
+      editor.MenuClicked = 1
+    END IF
+
+    IF mouseClickedInBox(84, 0, 32, 13) THEN
+      IF editor.TopMenuFocus = MENU_VIEW THEN
+        editor.TopMenuFocus = 0
+      ELSE
+        editor.TopMenuFocus = MENU_VIEW
+        editor.Focus = 0
+      END IF
+      editor.MenuClicked = 1
+    END IF
+
+    IF mouseClickedInBox(124, 0, 32, 13) THEN
+      IF editor.TopMenuFocus = MENU_TOOL THEN
+        editor.TopMenuFocus = 0
+      ELSE
+        editor.TopMenuFocus = MENU_TOOL
+        editor.Focus = 0
+      END IF
+      editor.MenuClicked = 1
+    END IF
+  END IF
+
+END SUB ' drawTopMenuAndScrollPMI
+
+''''''''''''''''''''''''
+SUB modalFileMenuNew
+
+  _KEYCLEAR
+
+  _DEST logicalScreen
+
+  DO
+    limitSpeed
+    mouseReadInput
+
+    tempWheel = mouse.Wheel
+    tempClicked1 = mouse.Clicked1
+    tempClicked2 = mouse.Clicked2
+    tempReleased1 = mouse.Released1
+    tempReleased2 = mouse.Released2
+    tempDown1 = mouse.Button1Down
+    tempDown2 = mouse.Button2Down
+
+    mouse.Wheel = 0
+    mouse.Clicked1 = 0
+    mouse.Clicked2 = 0
+    mouse.Released1 = 0
+    mouse.Released2 = 0
+    mouse.Button1Down = 0
+    mouse.Button2Down = 0
+
+    redrawAll
+
+    mouse.Wheel = tempWheel
+    mouse.Clicked1 = tempClicked1
+    mouse.Clicked2 = tempClicked2
+    mouse.Released1 = tempReleased1
+    mouse.Released2 = tempReleased2
+    mouse.Button1Down = tempDown1
+    mouse.Button2Down = tempDown2
+
+    boxW = 320
+    boxH = 80
+    boxX = (SCREENSIZEX - boxW) \ 2
+    boxY = (SCREENSIZEY - boxH) \ 2
+
+    drawBorderBox boxX, boxY, boxW, boxH, 15, editor.windowBarClr
+    PrintStr boxX + (boxW \ 2) - 32, boxY + 3, "NEW FILE", 14, 0, 1
+    LINE (boxX, boxY + 13)-(boxX + boxW - 1, boxY + 13), 15
+
+    closeBtnW = 15
+    closeBtnH = 13
+    closeBtnX = boxX + boxW - closeBtnW
+    closeBtnY = boxY
+    drawBorderBox closeBtnX, closeBtnY, closeBtnW, closeBtnH, 15, editor.CloseClr
+    PrintStr closeBtnX + 4, closeBtnY + 3, "X", 15, 0, 1
+
+    IF mouseClickedInBox(closeBtnX, closeBtnY, closeBtnW, closeBtnH) THEN
+      EXIT DO
+    END IF
+
+    PrintStr boxX + (boxW \ 2) - 132, boxY + 24, "ALL UNSAVED PROGRESS WILL BE LOST", 15, 0, 1
+
+    btnYesW = 64
+    btnYesH = 20
+    btnYesX = boxX + (boxW \ 2) - btnYesW - 16
+    btnYesY = boxY + 46
+
+    btnNoW = 64
+    btnNoH = 20
+    btnNoX = boxX + (boxW \ 2) + 16
+    btnNoY = boxY + 46
+
+    drawBorderBox btnYesX, btnYesY, btnYesW, btnYesH, 15, 0
+    PrintStr btnYesX + 20, btnYesY + 6, "YES", 15, 0, 1
+
+    drawBorderBox btnNoX, btnNoY, btnNoW, btnNoH, 15, 0
+    PrintStr btnNoX + 24, btnNoY + 6, "NO", 15, 0, 1
+
+    dispScreenFlushUpdate
+
+    doNewFile = 0
+
+    kVal = _KEYHIT
+    IF kVal <> 0 THEN
+      IF kVal = 27 THEN ' ESC
+        waitKeyRelease "ESC"
+        EXIT DO
+      END IF
+
+      IF kVal = 13 THEN ' ENTER
+        doNewFile = 1
+      END IF
+    END IF
+
+    IF mouseClickedInBox(btnYesX, btnYesY, btnYesW, btnYesH) THEN
+      doNewFile = 1
+    END IF
+
+    IF mouseClickedInBox(btnNoX, btnNoY, btnNoW, btnNoH) THEN
+      EXIT DO
+    END IF
+
+    IF doNewFile = 1 THEN
+      FOR ii = 1 TO EDITOR_LINE_MAX
+        editorText$(ii) = ""
+      NEXT
+      editor.LastLine = 1
+      editor.CursorX = 0
+      editor.CursorY = 1
+      editor.ScrollX = 0
+      editor.ScrollY = 1
+      editor.SelectStartX = 0
+      editor.SelectStartY = 1
+      editor.IsSelecting = 0
+      undoState.Ready = 0
+      lastActionWasTyping = 0
+      fileNameBase$ = "DFLTNAME"
+      editor.FileExtensionMode = FILE_EXT_BAS
+      refineCode 0, 0
+      addStatusMsg "NEW FILE CREATED"
+      EXIT DO
+    END IF
+
+  LOOP
+
+END SUB ' modalFileMenuNew
+
+''''''''''''''''''''''''
+SUB modalFileMenuOpen
+
+  DIM fileList$(1000)
+  DIM fileCount AS LONG
+
+  _DEST logicalScreen
+
+  fileCount = 0
+
+  oldClip$ = _CLIPBOARD$
+  _CLIPBOARD$ = ""
+  SHELL _HIDE "cmd /c (dir /b /a-d *.bas *.blb *.txt 2>nul & echo [[[QBERRDONE]]]) | clip"
+
+  tTime = TIMER
+  DO
+    limitSpeed
+    cb$ = _CLIPBOARD$
+    IF INSTR(cb$, "[[[QBERRDONE]]]") > 0 THEN EXIT DO
+    IF TIMER - tTime > 1.5 THEN EXIT DO
+  LOOP
+
+  _CLIPBOARD$ = oldClip$
+
+  markerPos = INSTR(cb$, "[[[QBERRDONE]]]")
+  IF markerPos > 0 THEN
+    cb$ = LEFT$(cb$, markerPos - 1)
+  END IF
+
+  ix = 1
+  cbLen = LEN(cb$)
+  DO WHILE ix <= cbLen
+    nextNl = INSTR(ix, cb$, CHR$(10))
+    IF nextNl = 0 THEN
+      fName$ = MID$(cb$, ix)
+      ix = cbLen + 1
+    ELSE
+      fName$ = MID$(cb$, ix, nextNl - ix)
+      ix = nextNl + 1
+    END IF
+
+    fName$ = LTRIM$(RTRIM$(fName$))
+    IF RIGHT$(fName$, 1) = CHR$(13) THEN fName$ = LEFT$(fName$, LEN(fName$) - 1)
+
+    IF fName$ <> "" THEN
+      IF fileCount < 1000 THEN
+        fileList$(fileCount) = fName$
+        fileCount = fileCount + 1
+      END IF
+    END IF
+  LOOP
+
+  IF fileCount = 0 THEN
+    addStatusMsg "NO SOURCE FILES FOUND"
+    EXIT SUB
+  END IF
+
+  editor.ModalScroll.ScrollY = 0
+  editor.ModalScroll.DragActive = 0
+  editor.ModalScroll.DragOffset = 0
+
+  ' Ensure clean key state
+  _KEYCLEAR
+
+  DO
+    limitSpeed
+    mouseReadInput
+
+    tempWheel = mouse.Wheel
+    tempClicked1 = mouse.Clicked1
+    tempClicked2 = mouse.Clicked2
+    tempReleased1 = mouse.Released1
+    tempReleased2 = mouse.Released2
+    tempDown1 = mouse.Button1Down
+    tempDown2 = mouse.Button2Down
+
+    mouse.Wheel = 0
+    mouse.Clicked1 = 0
+    mouse.Clicked2 = 0
+    mouse.Released1 = 0
+    mouse.Released2 = 0
+    mouse.Button1Down = 0
+    mouse.Button2Down = 0
+
+    redrawAll
+
+    mouse.Wheel = tempWheel
+    mouse.Clicked1 = tempClicked1
+    mouse.Clicked2 = tempClicked2
+    mouse.Released1 = tempReleased1
+    mouse.Released2 = tempReleased2
+    mouse.Button1Down = tempDown1
+    mouse.Button2Down = tempDown2
+
+    boxW = 200
+    boxH = 240
+    boxX = (SCREENSIZEX - boxW) \ 2
+    boxY = (SCREENSIZEY - boxH) \ 2
+
+    drawBorderBox boxX, boxY, boxW, boxH, 15, editor.windowBarClr
+
+    closeBtnW = 15
+    closeBtnH = 13
+    closeBtnX = boxX + boxW - closeBtnW
+    closeBtnY = boxY
+    drawBorderBox closeBtnX, closeBtnY, closeBtnW, closeBtnH, 15, editor.CloseClr
+    PrintStr closeBtnX + 4, closeBtnY + 3, "X", 15, 0, 1
+
+    IF mouseClickedInBox(closeBtnX, closeBtnY, closeBtnW, closeBtnH) THEN
+      EXIT DO
+    END IF
+
+    PrintStr boxX + (boxW \ 2) - (9 * 4), boxY + 3, "OPEN FILE", 14, 0, 1
+    LINE (boxX, boxY + 13)-(boxX + boxW - 1, boxY + 13), 15
+
+    itemH = 10
+    maxLines = (boxH - 15) \ itemH
+
+    ' Scrollbar
+    scrollBarX = boxX + boxW - 12
+    scrollBarY = boxY + 14
+    scrollBarW = 12
+    scrollBarH = boxH - 15
+
+    processVScrollbar SCROLL_MODAL, scrollBarX, scrollBarY, scrollBarW, scrollBarH, fileCount, maxLines, 0
+
+    ' Mouse wheel
+    IF mouse.Wheel <> 0 THEN
+      IF mouseWithinBoxBounds(boxX, boxY, boxW, boxH) THEN
+        editor.ModalScroll.ScrollY = editor.ModalScroll.ScrollY + mouse.Wheel
+        maxScroll = fileCount - maxLines
+        IF maxScroll < 0 THEN maxScroll = 0
+        IF editor.ModalScroll.ScrollY > maxScroll THEN editor.ModalScroll.ScrollY = maxScroll
+        IF editor.ModalScroll.ScrollY < 0 THEN editor.ModalScroll.ScrollY = 0
+      END IF
+    END IF
+
+    ' Draw items
+    FOR ii = 0 TO maxLines - 1
+      fIdx = ii + editor.ModalScroll.ScrollY
+      IF fIdx < fileCount THEN
+        itemY = boxY + 14 + (ii * itemH)
+        sOutName$ = fileList$(fIdx)
+        IF LEN(sOutName$) > 20 THEN sOutName$ = LEFT$(sOutName$, 20)
+
+        ' Hover
+        IF mouseWithinBoxBounds(boxX + 2, itemY, boxW - 16, itemH) THEN
+          drawClearBox boxX + 2, itemY, boxW - 16, itemH, 9
+
+          IF mouseClickedInBox(boxX + 2, itemY, boxW - 16, itemH) THEN
+            LINE (boxX + 2, itemY)-(boxX + boxW - 15, itemY + itemH - 1), 1, BF
+            PrintStr boxX + 8, itemY + 1, sOutName$, 15, 0, 1
+
+            dispScreenFlushUpdate
+
+            waitTimer UI_FLASH_TIME
+
+            cleanName$ = fileList$(fIdx)
+            dotPos = 0
+            FOR iDot = LEN(cleanName$) TO 1 STEP -1
+              IF MID$(cleanName$, iDot, 1) = "." THEN dotPos = iDot: EXIT FOR
+            NEXT
+
+            IF dotPos > 0 THEN
+              extStr$ = UCASE$(MID$(cleanName$, dotPos))
+              cleanName$ = LEFT$(cleanName$, dotPos - 1)
+              IF extStr$ = ".TXT" THEN
+                editor.FileExtensionMode = FILE_EXT_TXT
+              ELSE
+                IF extStr$ = ".BLB" THEN
+                  editor.FileExtensionMode = FILE_EXT_BLB
+                ELSE
+                  editor.FileExtensionMode = FILE_EXT_BAS
+                END IF
+              END IF
+            ELSE
+              editor.FileExtensionMode = FILE_EXT_BAS
+            END IF
+
+            fileNameBase$ = cleanName$
+            fileCodeLoad
+            refineCode 0, 0
+
+            editor.CursorY = 1
+            editor.CursorX = 0
+            editor.ScrollY = 1
+            editor.ScrollX = 0
+            editor.SelectStartX = 0
+            editor.SelectStartY = 1
+            editor.IsSelecting = 0
+            editor.Focus = 1
+
+            curExt$ = ".BAS"
+            IF editor.FileExtensionMode = FILE_EXT_TXT THEN curExt$ = ".TXT"
+            IF editor.FileExtensionMode = FILE_EXT_BLB THEN curExt$ = ".BLB"
+
+            addStatusMsg "LOADED " + fileNameBase$ + curExt$
+
+            EXIT DO
+          END IF
+        END IF
+
+        PrintStr boxX + 8, itemY + 1, sOutName$, 11, 0, 1
+      END IF
+    NEXT
+
+    dispScreenFlushUpdate
+
+    kVal = keyCheck("ESC")
+    IF kVal = 27 THEN
+      waitKeyRelease "ESC"
+      EXIT DO
+    END IF
+
+  LOOP
+
+  _DEST logicalScreen
+
+END SUB ' modalFileMenuOpen
+
+''''''''''''''''''''''''
+SUB modalFileMenuSave
+
+  saveAsName$ = fileNameBase$
+
+  _KEYCLEAR
+
+  _DEST logicalScreen
+
+  DO
+    limitSpeed
+    mouseReadInput
+
+    tempWheel = mouse.Wheel
+    tempClicked1 = mouse.Clicked1
+    tempClicked2 = mouse.Clicked2
+    tempReleased1 = mouse.Released1
+    tempReleased2 = mouse.Released2
+    tempDown1 = mouse.Button1Down
+    tempDown2 = mouse.Button2Down
+
+    mouse.Wheel = 0
+    mouse.Clicked1 = 0
+    mouse.Clicked2 = 0
+    mouse.Released1 = 0
+    mouse.Released2 = 0
+    mouse.Button1Down = 0
+    mouse.Button2Down = 0
+
+    redrawAll
+
+    mouse.Wheel = tempWheel
+    mouse.Clicked1 = tempClicked1
+    mouse.Clicked2 = tempClicked2
+    mouse.Released1 = tempReleased1
+    mouse.Released2 = tempReleased2
+    mouse.Button1Down = tempDown1
+    mouse.Button2Down = tempDown2
+
+    boxW = 320
+    boxH = 64
+    boxX = (SCREENSIZEX - boxW) \ 2
+    boxY = (SCREENSIZEY - boxH) \ 2
+
+    drawBorderBox boxX, boxY, boxW, boxH, 15, editor.windowBarClr
+    PrintStr boxX + (boxW \ 2) - 28, boxY + 3, "SAVE AS", 14, 0, 1
+    LINE (boxX, boxY + 13)-(boxX + boxW - 1, boxY + 13), 15
+
+    closeBtnW = 15
+    closeBtnH = 13
+    closeBtnX = boxX + boxW - closeBtnW
+    closeBtnY = boxY
+    drawBorderBox closeBtnX, closeBtnY, closeBtnW, closeBtnH, 15, editor.CloseClr
+    PrintStr closeBtnX + 4, closeBtnY + 3, "X", 15, 0, 1
+
+    IF mouseClickedInBox(closeBtnX, closeBtnY, closeBtnW, closeBtnH) THEN
+      EXIT DO
+    END IF
+
+    ' Input box
+    inputBoxX = boxX + 16
+    inputBoxY = boxY + 24
+    inputBoxW = boxW - 32
+    inputBoxH = 16
+    drawBorderBox inputBoxX, inputBoxY, inputBoxW, inputBoxH, 15, 0
+
+    ' Draw text
+    PrintStr inputBoxX + 4, inputBoxY + 4, saveAsName$ + "_", 15, 0, 1
+
+    dispScreenFlushUpdate
+
+    kVal = _KEYHIT
+    IF kVal <> 0 THEN
+      IF kVal = 27 THEN ' ESC
+        waitKeyRelease "ESC"
+        EXIT DO
+      END IF
+
+      IF kVal = 13 THEN ' ENTER
+        IF saveAsName$ <> "" THEN
+          cleanName$ = saveAsName$
+          dotPos = 0
+          FOR iDot = LEN(cleanName$) TO 1 STEP -1
+            IF MID$(cleanName$, iDot, 1) = "." THEN dotPos = iDot: EXIT FOR
+          NEXT
+
+          IF dotPos > 0 THEN
+            extStr$ = UCASE$(MID$(cleanName$, dotPos))
+            cleanName$ = LEFT$(cleanName$, dotPos - 1)
+            IF extStr$ = ".TXT" THEN
+              editor.FileExtensionMode = FILE_EXT_TXT
+            ELSE
+              IF extStr$ = ".BLB" THEN
+                editor.FileExtensionMode = FILE_EXT_BLB
+              ELSE
+                editor.FileExtensionMode = FILE_EXT_BAS
+              END IF
+            END IF
+          END IF
+
+          fileNameBase$ = cleanName$
+
+          curExt$ = ".BAS"
+          IF editor.FileExtensionMode = FILE_EXT_TXT THEN curExt$ = ".TXT"
+          IF editor.FileExtensionMode = FILE_EXT_BLB THEN curExt$ = ".BLB"
+
+          fileCodeSave
+          addStatusMsg "SAVED AS " + fileNameBase$ + curExt$
+        END IF
+        EXIT DO
+      END IF
+
+      IF kVal = 8 THEN ' Backspace
+        qLen = LEN(saveAsName$)
+        IF qLen > 0 THEN
+          saveAsName$ = LEFT$(saveAsName$, qLen - 1)
+        END IF
+      ELSE
+        IF kVal >= 32 AND kVal <= 126 THEN
+          IF LEN(saveAsName$) < 34 THEN
+            saveAsName$ = saveAsName$ + CHR$(kVal)
+          END IF
+        END IF
+      END IF
+    END IF
+
+  LOOP
+
+END SUB ' modalFileMenuSave
+
+''''''''''''''''''''''''
+SUB modalGoToLine
+
+  _KEYCLEAR
+
+  goToStr$ = ""
+
+  DO
+    limitSpeed
+    mouseReadInput
+
+    tempWheel = mouse.Wheel
+    tempClicked1 = mouse.Clicked1
+    tempClicked2 = mouse.Clicked2
+    tempReleased1 = mouse.Released1
+    tempReleased2 = mouse.Released2
+    tempDown1 = mouse.Button1Down
+    tempDown2 = mouse.Button2Down
+
+    mouse.Wheel = 0
+    mouse.Clicked1 = 0
+    mouse.Clicked2 = 0
+    mouse.Released1 = 0
+    mouse.Released2 = 0
+    mouse.Button1Down = 0
+    mouse.Button2Down = 0
+
+    _DEST logicalScreen
+
+    redrawAll
+
+    mouse.Wheel = tempWheel
+    mouse.Clicked1 = tempClicked1
+    mouse.Clicked2 = tempClicked2
+    mouse.Released1 = tempReleased1
+    mouse.Released2 = tempReleased2
+    mouse.Button1Down = tempDown1
+    mouse.Button2Down = tempDown2
+
+    boxW = 160
+    boxH = 64
+    boxX = (SCREENSIZEX - boxW) \ 2
+    boxY = (SCREENSIZEY - boxH) \ 2
+
+    drawBorderBox boxX, boxY, boxW, boxH, 15, editor.windowBarClr
+    PrintStr boxX + 40, boxY + 3, "GO TO LINE", 14, 0, 1
+    LINE (boxX, boxY + 13)-(boxX + boxW - 1, boxY + 13), 15
+
+    closeBtnW = 15
+    closeBtnH = 13
+    closeBtnX = boxX + boxW - closeBtnW
+    closeBtnY = boxY
+    drawBorderBox closeBtnX, closeBtnY, closeBtnW, closeBtnH, 15, editor.CloseClr
+    PrintStr closeBtnX + 4, closeBtnY + 3, "X", 15, 0, 1
+
+    IF mouseClickedInBox(closeBtnX, closeBtnY, closeBtnW, closeBtnH) THEN
+      EXIT DO
+    END IF
+
+    ' Input box
+    inputBoxX = boxX + 16
+    inputBoxY = boxY + 24
+    inputBoxW = boxW - 32
+    inputBoxH = 16
+    drawBorderBox inputBoxX, inputBoxY, inputBoxW, inputBoxH, 15, 0
+
+    ' Draw text
+    PrintStr inputBoxX + 4, inputBoxY + 4, goToStr$ + "_", 15, 0, 1
+
+    dispScreenFlushUpdate
+
+    kVal = _KEYHIT
+    IF kVal <> 0 THEN
+      IF kVal = 27 THEN ' ESC
+        waitKeyRelease "ESC"
+        EXIT DO
+      END IF
+
+      IF kVal = 13 THEN ' ENTER
+        IF goToStr$ <> "" THEN
+          targetLine = VAL(goToStr$)
+          IF targetLine > 0 THEN
+            IF targetLine > editor.LastLine THEN targetLine = editor.LastLine
+            editor.CursorY = targetLine
+            editor.CursorX = 0
+            editor.ScrollY = targetLine - 14
+            IF editor.ScrollY < 1 THEN editor.ScrollY = 1
+            editor.ScrollX = 0
+            editor.SelectStartX = 0
+            editor.SelectStartY = targetLine
+            editor.IsSelecting = 0
+            editor.Focus = 1
+          END IF
+        END IF
+        EXIT DO
+      END IF
+
+      IF kVal = 8 THEN ' Backspace
+        qLen = LEN(goToStr$)
+        IF qLen > 0 THEN
+          goToStr$ = LEFT$(goToStr$, qLen - 1)
+        END IF
+      ELSE
+        IF kVal >= 48 AND kVal <= 57 THEN ' Numbers only
+          IF LEN(goToStr$) < 6 THEN
+            goToStr$ = goToStr$ + CHR$(kVal)
+          END IF
+        END IF
+      END IF
+    END IF
+
+  LOOP
+
+END SUB ' modalGoToLine
+
+''''''''''''''''''''''''
+SUB modalImportFileMenu
+
+  DIM fileList$(1000)
+  DIM fileCount AS LONG
+
+  _DEST logicalScreen
+
+  fileCount = 0
+
+  oldClip$ = _CLIPBOARD$
+  _CLIPBOARD$ = ""
+  SHELL _HIDE "cmd /c (dir /b /a-d *.bas *.blb 2>nul & echo [[[QBERRDONE]]]) | clip"
+
+  tTime = TIMER
+  DO
+    limitSpeed
+    cb$ = _CLIPBOARD$
+    IF INSTR(cb$, "[[[QBERRDONE]]]") > 0 THEN EXIT DO
+    IF TIMER - tTime > 1.5 THEN EXIT DO
+  LOOP
+
+  _CLIPBOARD$ = oldClip$
+
+  markerPos = INSTR(cb$, "[[[QBERRDONE]]]")
+  IF markerPos > 0 THEN
+    cb$ = LEFT$(cb$, markerPos - 1)
+  END IF
+
+  ix = 1
+  cbLen = LEN(cb$)
+  DO WHILE ix <= cbLen
+    nextNl = INSTR(ix, cb$, CHR$(10))
+    IF nextNl = 0 THEN
+      fName$ = MID$(cb$, ix)
+      ix = cbLen + 1
+    ELSE
+      fName$ = MID$(cb$, ix, nextNl - ix)
+      ix = nextNl + 1
+    END IF
+
+    fName$ = LTRIM$(RTRIM$(fName$))
+    IF RIGHT$(fName$, 1) = CHR$(13) THEN fName$ = LEFT$(fName$, LEN(fName$) - 1)
+
+    IF fName$ <> "" THEN
+      IF fileCount < 1000 THEN
+        fileList$(fileCount) = fName$
+        fileCount = fileCount + 1
+      END IF
+    END IF
+  LOOP
+
+  IF fileCount = 0 THEN
+    addStatusMsg "NO BAS OR BLB FILES FOUND"
+    EXIT SUB
+  END IF
+
+  editor.ModalScroll.ScrollY = 0
+  editor.ModalScroll.DragActive = 0
+  editor.ModalScroll.DragOffset = 0
+
+  ' Ensure clean key state
+  _KEYCLEAR
+
+  DO
+    limitSpeed
+    mouseReadInput
+
+    tempWheel = mouse.Wheel
+    tempClicked1 = mouse.Clicked1
+    tempClicked2 = mouse.Clicked2
+    tempReleased1 = mouse.Released1
+    tempReleased2 = mouse.Released2
+    tempDown1 = mouse.Button1Down
+    tempDown2 = mouse.Button2Down
+
+    mouse.Wheel = 0
+    mouse.Clicked1 = 0
+    mouse.Clicked2 = 0
+    mouse.Released1 = 0
+    mouse.Released2 = 0
+    mouse.Button1Down = 0
+    mouse.Button2Down = 0
+
+    redrawAll
+
+    mouse.Wheel = tempWheel
+    mouse.Clicked1 = tempClicked1
+    mouse.Clicked2 = tempClicked2
+    mouse.Released1 = tempReleased1
+    mouse.Released2 = tempReleased2
+    mouse.Button1Down = tempDown1
+    mouse.Button2Down = tempDown2
+
+    boxW = 200
+    boxH = 240
+    boxX = (SCREENSIZEX - boxW) \ 2
+    boxY = (SCREENSIZEY - boxH) \ 2
+
+    drawBorderBox boxX, boxY, boxW, boxH, 15, editor.windowBarClr
+
+    closeBtnW = 15
+    closeBtnH = 13
+    closeBtnX = boxX + boxW - closeBtnW
+    closeBtnY = boxY
+    drawBorderBox closeBtnX, closeBtnY, closeBtnW, closeBtnH, 15, editor.CloseClr
+    PrintStr closeBtnX + 4, closeBtnY + 3, "X", 15, 0, 1
+
+    IF mouseClickedInBox(closeBtnX, closeBtnY, closeBtnW, closeBtnH) THEN
+      EXIT DO
+    END IF
+
+    PrintStr boxX + (boxW \ 2) - (11 * 4), boxY + 3, "IMPORT FILE", 14, 0, 1
+    LINE (boxX, boxY + 13)-(boxX + boxW - 1, boxY + 13), 15
+
+    itemH = 10
+    maxLines = (boxH - 15) \ itemH
+
+    ' Scrollbar
+    scrollBarX = boxX + boxW - 12
+    scrollBarY = boxY + 14
+    scrollBarW = 12
+    scrollBarH = boxH - 15
+
+    processVScrollbar SCROLL_MODAL, scrollBarX, scrollBarY, scrollBarW, scrollBarH, fileCount, maxLines, 0
+
+    ' Mouse wheel
+    IF mouse.Wheel <> 0 THEN
+      IF mouseWithinBoxBounds(boxX, boxY, boxW, boxH) THEN
+        editor.ModalScroll.ScrollY = editor.ModalScroll.ScrollY + mouse.Wheel
+        maxScroll = fileCount - maxLines
+        IF maxScroll < 0 THEN maxScroll = 0
+        IF editor.ModalScroll.ScrollY > maxScroll THEN editor.ModalScroll.ScrollY = maxScroll
+        IF editor.ModalScroll.ScrollY < 0 THEN editor.ModalScroll.ScrollY = 0
+      END IF
+    END IF
+
+    ' Draw items
+    FOR ii = 0 TO maxLines - 1
+      fIdx = ii + editor.ModalScroll.ScrollY
+      IF fIdx < fileCount THEN
+        itemY = boxY + 14 + (ii * itemH)
+        sOutName$ = fileList$(fIdx)
+        IF LEN(sOutName$) > 20 THEN sOutName$ = LEFT$(sOutName$, 20)
+
+        ' Hover
+        IF mouseWithinBoxBounds(boxX + 2, itemY, boxW - 16, itemH) THEN
+          drawClearBox boxX + 2, itemY, boxW - 16, itemH, 9
+
+          IF mouseClickedInBox(boxX + 2, itemY, boxW - 16, itemH) THEN
+            LINE (boxX + 2, itemY)-(boxX + boxW - 15, itemY + itemH - 1), 1, BF
+            PrintStr boxX + 8, itemY + 1, sOutName$, 15, 0, 1
+
+            dispScreenFlushUpdate
+
+            waitTimer UI_FLASH_TIME
+
+            undo_StateSave
+            lastActionWasTyping = 0
+
+            fileCodeImport fileList$(fIdx)
+            refineCode 0, 0
+
+            ' Jump view to the bottom where the imported code was injected
+            editor.CursorY = editor.LastLine
+            editor.CursorX = 0
+            editor.ScrollY = editor.CursorY - 14
+            IF editor.ScrollY < 1 THEN editor.ScrollY = 1
+            editor.ScrollX = 0
+            editor.SelectStartX = 0
+            editor.SelectStartY = editor.LastLine
+            editor.IsSelecting = 0
+            editor.Focus = 1
+
+            addStatusMsg "IMPORTED " + fileList$(fIdx)
+
+            EXIT DO
+          END IF
+        END IF
+
+        PrintStr boxX + 8, itemY + 1, sOutName$, 11, 0, 1
+      END IF
+    NEXT
+
+    dispScreenFlushUpdate
+
+    kVal = keyCheck("ESC")
+    IF kVal = 27 THEN
+      waitKeyRelease "ESC"
+      EXIT DO
+    END IF
+
+  LOOP
+
+END SUB ' modalImportFileMenu
+
+''''''''''''''''''''''''
+SUB modalSearch
+
+  ' Give the modal a clean slate to prevent double-triggering inputs
+  _KEYCLEAR
+
+  DO
+    limitSpeed
+    mouseReadInput
+
+    tempWheel = mouse.Wheel
+    tempClicked1 = mouse.Clicked1
+    tempClicked2 = mouse.Clicked2
+    tempReleased1 = mouse.Released1
+    tempReleased2 = mouse.Released2
+    tempDown1 = mouse.Button1Down
+    tempDown2 = mouse.Button2Down
+
+    mouse.Wheel = 0
+    mouse.Clicked1 = 0
+    mouse.Clicked2 = 0
+    mouse.Released1 = 0
+    mouse.Released2 = 0
+    mouse.Button1Down = 0
+    mouse.Button2Down = 0
+
+    _DEST logicalScreen
+
+    redrawAll
+
+    mouse.Wheel = tempWheel
+    mouse.Clicked1 = tempClicked1
+    mouse.Clicked2 = tempClicked2
+    mouse.Released1 = tempReleased1
+    mouse.Released2 = tempReleased2
+    mouse.Button1Down = tempDown1
+    mouse.Button2Down = tempDown2
+
+    boxW = 320
+    boxH = 64
+    boxX = (SCREENSIZEX - boxW) \ 2
+    boxY = (SCREENSIZEY - boxH) \ 2
+
+    drawBorderBox boxX, boxY, boxW, boxH, 15, editor.windowBarClr
+    PrintStr boxX + (boxW \ 2) - 44, boxY + 3, "SEARCH FIND", 14, 0, 1
+    LINE (boxX, boxY + 13)-(boxX + boxW - 1, boxY + 13), 15
+
+    closeBtnW = 15
+    closeBtnH = 13
+    closeBtnX = boxX + boxW - closeBtnW
+    closeBtnY = boxY
+    drawBorderBox closeBtnX, closeBtnY, closeBtnW, closeBtnH, 15, editor.CloseClr
+    PrintStr closeBtnX + 4, closeBtnY + 3, "X", 15, 0, 1
+
+    IF mouseClickedInBox(closeBtnX, closeBtnY, closeBtnW, closeBtnH) THEN
+      EXIT DO
+    END IF
+
+    ' Input box
+    inputBoxX = boxX + 16
+    inputBoxY = boxY + 24
+    inputBoxW = boxW - 32
+    inputBoxH = 16
+    drawBorderBox inputBoxX, inputBoxY, inputBoxW, inputBoxH, 15, 0
+
+    ' Draw text
+    PrintStr inputBoxX + 4, inputBoxY + 4, editorSearchQuery$ + "_", 15, 0, 1
+
+    dispScreenFlushUpdate
+
+    kVal = _KEYHIT
+    IF kVal <> 0 THEN
+      IF kVal = 27 THEN ' ESC
+        waitKeyRelease "ESC"
+        EXIT DO
+      END IF
+
+      IF kVal = 13 THEN ' ENTER
+        IF editorSearchQuery$ <> "" THEN
+          findEditorNext
+        END IF
+        EXIT DO
+      END IF
+
+      IF kVal = 8 THEN ' Backspace
+        qLen = LEN(editorSearchQuery$)
+        IF qLen > 0 THEN
+          editorSearchQuery$ = LEFT$(editorSearchQuery$, qLen - 1)
+        END IF
+      ELSE
+        IF kVal >= 32 AND kVal <= 126 THEN
+          IF LEN(editorSearchQuery$) < 34 THEN
+            editorSearchQuery$ = editorSearchQuery$ + CHR$(kVal)
+          END IF
+        END IF
+      END IF
+    END IF
+
+  LOOP
+
+END SUB ' modalSearch
+
+''''''''''''''''''''''''
+SUB modalViewSubs
+
+  editor.ModalScroll.ScrollY = 0
+  editor.ModalScroll.DragActive = 0
+  editor.ModalScroll.DragOffset = 0
+
+  ' Ensure the sub list is completely fresh
+  refineCode 0, 0
+
+  _DEST logicalScreen
+
+  DO
+    limitSpeed
+    mouseReadInput
+
+    tempWheel = mouse.Wheel
+    tempClicked1 = mouse.Clicked1
+    tempClicked2 = mouse.Clicked2
+    tempReleased1 = mouse.Released1
+    tempReleased2 = mouse.Released2
+    tempDown1 = mouse.Button1Down
+    tempDown2 = mouse.Button2Down
+
+    mouse.Wheel = 0
+    mouse.Clicked1 = 0
+    mouse.Clicked2 = 0
+    mouse.Released1 = 0
+    mouse.Released2 = 0
+    mouse.Button1Down = 0
+    mouse.Button2Down = 0
+
+    redrawAll
+
+    mouse.Wheel = tempWheel
+    mouse.Clicked1 = tempClicked1
+    mouse.Clicked2 = tempClicked2
+    mouse.Released1 = tempReleased1
+    mouse.Released2 = tempReleased2
+    mouse.Button1Down = tempDown1
+    mouse.Button2Down = tempDown2
+
+    boxW = 200
+    boxH = 240
+    boxX = (SCREENSIZEX - boxW) \ 2
+    boxY = (SCREENSIZEY - boxH) \ 2
+
+    drawBorderBox boxX, boxY, boxW, boxH, 15, editor.windowBarClr
+
+    closeBtnW = 15
+    closeBtnH = 13
+    closeBtnX = boxX + boxW - closeBtnW
+    closeBtnY = boxY
+    drawBorderBox closeBtnX, closeBtnY, closeBtnW, closeBtnH, 15, editor.CloseClr
+    PrintStr closeBtnX + 4, closeBtnY + 3, "X", 15, 0, 1
+
+    IF mouseClickedInBox(closeBtnX, closeBtnY, closeBtnW, closeBtnH) THEN
+      EXIT DO
+    END IF
+
+    PrintStr boxX + (boxW \ 2) - (15 * 4), boxY + 3, "SUBS / FUNCTIONS", 14, 0, 1
+    LINE (boxX, boxY + 13)-(boxX + boxW - 1, boxY + 13), 15
+
+    itemH = 10
+    maxLines = (boxH - 15) \ itemH
+
+    ' Scrollbar
+    scrollBarX = boxX + boxW - 12
+    scrollBarY = boxY + 14
+    scrollBarW = 12
+    scrollBarH = boxH - 15
+
+    processVScrollbar SCROLL_MODAL, scrollBarX, scrollBarY, scrollBarW, scrollBarH, uiSubCount, maxLines, 0
+
+    ' Mouse wheel
+    IF mouse.Wheel <> 0 THEN
+      IF mouseWithinBoxBounds(boxX, boxY, boxW, boxH) THEN
+        editor.ModalScroll.ScrollY = editor.ModalScroll.ScrollY + mouse.Wheel
+        maxScroll = uiSubCount - maxLines
+        IF maxScroll < 0 THEN maxScroll = 0
+        IF editor.ModalScroll.ScrollY > maxScroll THEN editor.ModalScroll.ScrollY = maxScroll
+        IF editor.ModalScroll.ScrollY < 0 THEN editor.ModalScroll.ScrollY = 0
+      END IF
+    END IF
+
+    ' Draw items
+    FOR ii = 0 TO maxLines - 1
+      subIdx = ii + editor.ModalScroll.ScrollY
+      IF subIdx < uiSubCount THEN
+        itemY = boxY + 14 + (ii * itemH)
+        sOutName$ = uiSubName$(subIdx)
+
+        ' Hover
+        IF mouseWithinBoxBounds(boxX + 2, itemY, boxW - 16, itemH) THEN
+          drawClearBox boxX + 2, itemY, boxW - 16, itemH, 9
+
+          IF mouseClickedInBox(boxX + 2, itemY, boxW - 16, itemH) THEN
+            ' Update main UI funcScrollY to ensure right-hand list brings the sub into view
+            IF subIdx < editor.FuncScroll.ScrollY OR subIdx >= editor.FuncScroll.ScrollY + 12 THEN
+              editor.FuncScroll.ScrollY = subIdx - 5
+              IF editor.FuncScroll.ScrollY < 0 THEN editor.FuncScroll.ScrollY = 0
+              maxFuncScroll = uiSubCount - 12
+              IF maxFuncScroll < 0 THEN maxFuncScroll = 0
+              IF editor.FuncScroll.ScrollY > maxFuncScroll THEN editor.FuncScroll.ScrollY = maxFuncScroll
+              ' Redraw the right list so it reflects the new scroll position
+              drawFuncListPMI
+            END IF
+
+            ' Flash the right-hand box list simultaneously
+            funcListBoxX = RIGHT_BOX_X
+            funcListBoxY = editor.StartY + 15
+            funcListBoxW = 122
+            rowY = funcListBoxY + 3 + ((subIdx - editor.FuncScroll.ScrollY + 1) * 10)
+            LINE (funcListBoxX + 1, rowY)-(funcListBoxX + funcListBoxW - 11, rowY + 9), 1, BF
+            PrintStr funcListBoxX + RIGHT_BOX_SPACING, rowY + 1, LEFT$(uiSubName$(subIdx), 13), 15, 0, 1
+
+            ' Flash the modal list
+            LINE (boxX + 2, itemY)-(boxX + boxW - 15, itemY + itemH - 1), 1, BF
+            PrintStr boxX + 8, itemY + 1, sOutName$, 15, 0, 1
+
+            dispScreenFlushUpdate
+
+            waitTimer UI_FLASH_TIME
+
+            ' Jump to sub and close window
+            editor.CursorY = uiSubLine(subIdx)
+            editor.CursorX = 0
+            editor.ScrollY = editor.CursorY - 14
+            IF editor.ScrollY < 1 THEN editor.ScrollY = 1
+            editor.ScrollX = 0
+            editor.SelectStartX = 0
+            editor.SelectStartY = 1
+            editor.IsSelecting = 0
+            editor.Focus = 1
+
+            EXIT DO
+          END IF
+        END IF
+
+        PrintStr boxX + 8, itemY + 1, sOutName$, 11, 0, 1
+      END IF
+    NEXT
+
+    dispScreenFlushUpdate
+
+    kVal = keyCheck("ESC")
+    IF kVal = 27 THEN
+      waitKeyRelease "ESC"
+      EXIT DO
+    END IF
+
+  LOOP
+
+END SUB ' modalViewSubs
+
+''''''''''''''''''''''''
+SUB pasteClipboardText
+
+  IF editor.IsSelecting = 1 THEN
+    deleteSelection
+    editor.IsSelecting = 0
+  END IF
+
+  cbText$ = _CLIPBOARD$
+  cbLen = LEN(cbText$)
+  IF cbLen = 0 THEN EXIT SUB
+
+  ' Pre-allocate a buffer to rapidly filter non-printable characters in a single O(N) pass
+  cleanText$ = SPACE$(cbLen)
+  cleanIdx = 1
+
+  FOR ii = 1 TO cbLen
+    cbAsc = ASC(cbText$, ii)
+    ' Allow only newlines (10) and standard printable characters (32 to 126)
+    IF cbAsc = 10 OR (cbAsc >= 32 AND cbAsc <= 126) THEN
+      ASC(cleanText$, cleanIdx) = cbAsc
+      cleanIdx = cleanIdx + 1
+    END IF
+  NEXT
+
+  cbText$ = LEFT$(cleanText$, cleanIdx - 1)
+  cbLen = LEN(cbText$)
+  IF cbLen = 0 THEN EXIT SUB
+
+  ' Count newlines to determine the exact array shift distance
+  nlCount = 0
+  ix = 1
+  DO WHILE ix <= cbLen
+    nextNl = INSTR(ix, cbText$, CHR$(10))
+    IF nextNl > 0 THEN
+      nlCount = nlCount + 1
+      ix = nextNl + 1
+    ELSE
+      EXIT DO
+    END IF
+  LOOP
+
+  ' Shift array down exactly once in bulk
+  IF nlCount > 0 THEN
+    FOR iy = editor.LastLine TO editor.CursorY + 1 STEP -1
+      IF iy + nlCount <= EDITOR_LINE_MAX THEN
+        editorText$(iy + nlCount) = editorText$(iy)
+      END IF
+    NEXT
+
+    editor.LastLine = editor.LastLine + nlCount
+    IF editor.LastLine > EDITOR_LINE_MAX THEN editor.LastLine = EDITOR_LINE_MAX
+  END IF
+
+  currentLine$ = editorText$(editor.CursorY)
+  leftPart$ = LEFT$(currentLine$, editor.CursorX)
+  rightPart$ = MID$(currentLine$, editor.CursorX + 1)
+
+  ix = 1
+  curPasteY = editor.CursorY
+  linesPasted = 0
+
+  ' Process the filtered clipboard and inject directly into the opened array spaces
+  DO WHILE ix <= cbLen
+    nextNl = INSTR(ix, cbText$, CHR$(10))
+    IF nextNl = 0 THEN
+      ' Final chunk of text (no trailing newline)
+      chunk$ = MID$(cbText$, ix)
+      IF curPasteY <= EDITOR_LINE_MAX THEN
+        IF linesPasted = 0 THEN
+          editorText$(curPasteY) = leftPart$ + chunk$ + rightPart$
+          editor.CursorX = LEN(leftPart$ + chunk$)
+        ELSE
+          editorText$(curPasteY) = chunk$ + rightPart$
+          editor.CursorX = LEN(chunk$)
+        END IF
+      END IF
+      EXIT DO
+    ELSE
+      ' Extract line up to the newline
+      chunk$ = MID$(cbText$, ix, nextNl - ix)
+      IF curPasteY <= EDITOR_LINE_MAX THEN
+        IF linesPasted = 0 THEN
+          editorText$(curPasteY) = leftPart$ + chunk$
+        ELSE
+          editorText$(curPasteY) = chunk$
+        END IF
+      END IF
+
+      linesPasted = linesPasted + 1
+      curPasteY = curPasteY + 1
+      ix = nextNl + 1
+    END IF
+  LOOP
+
+  ' Handle edge case where clipboard ends exactly on a newline
+  IF RIGHT$(cbText$, 1) = CHR$(10) THEN
+    IF curPasteY <= EDITOR_LINE_MAX THEN
+      editorText$(curPasteY) = rightPart$
+      editor.CursorX = 0
+    END IF
+  END IF
+
+  editor.CursorY = curPasteY
+  IF editor.CursorY > EDITOR_LINE_MAX THEN
+    editor.CursorY = EDITOR_LINE_MAX
+    editor.CursorX = LEN(editorText$(EDITOR_LINE_MAX))
+  END IF
+
+  ' Update view scrolling
+  IF editor.CursorY < editor.ScrollY THEN editor.ScrollY = editor.CursorY
+  IF editor.CursorY >= editor.ScrollY + 29 THEN editor.ScrollY = editor.CursorY - 28
+  IF editor.CursorX < editor.ScrollX THEN editor.ScrollX = editor.CursorX
+  IF editor.CursorX >= editor.ScrollX + 56 THEN editor.ScrollX = editor.CursorX - 55
+
+END SUB ' pasteClipboardText
+
+''''''''''''''''''''''''
+SUB PrintTextLineWithBanners (text$, wClr, whereY)
+
+  paddingPixels = 8
+
+  textStartX = 9
+
+  SELECT CASE whereY
+
+    CASE TOP: textStartY = 4
+    CASE MIDDLE: textStartY = 20
+    CASE BOTTOM: textStartY = 30
+
+  END SELECT ' whereY
+
+  textPixelWidth = LEN(text$) * 8
+  boxPixelWidth = paddingPixels + textPixelWidth + paddingPixels
+  boxPixelHeight = paddingPixels + 8 + paddingPixels
+
+  boxStartX = (textStartX * 8) - paddingPixels
+  boxStartY = (textStartY * 8) - paddingPixels
+
+  IF (boxStartX + boxPixelWidth) >= SCREENSIZEX THEN
+    boxStartX = SCREENSIZEX - boxPixelWidth
+  END IF
+
+  textStartX = (boxStartX + paddingPixels) \ 8
+
+  IF (textStartX * 8) + textPixelWidth >= SCREENSIZEX THEN textStartX = 1
+
+  boxStartX = (textStartX * 8) - paddingPixels
+
+  drawBorderBox boxStartX, boxStartY, boxPixelWidth, boxPixelHeight, 1, 0
+  drawClearBox boxStartX + 1, boxStartY + 1, boxPixelWidth - 2, boxPixelHeight - 2, 15
+
+  PrintStr boxStartX + paddingPixels, boxStartY + paddingPixels, text$, wClr, 0, 0
+
+END SUB ' PrintTextLineWithBanners
+
+''''''''''''''''''''''''
+SUB processInput
+
+  IF keyCheck("ESC") THEN
+    IF editor.MenuMode = 1 OR editor.MenuMode = 2 THEN
+      editor.MenuMode = 0
+      waitKeyRelease "ESC"
+    ELSE
+      IF _KEYDOWN(100303) OR _KEYDOWN(100304) THEN
+        waitKeyRelease "ESC"
+        confirmExit
+      END IF
+    END IF
+  END IF
+
+  IF keyCheck("F5") THEN
+    IF compileState = COMP_IDLE THEN
+      hasCode = 0
+      IF editor.LastLine > 1 THEN
+        hasCode = 1
+      ELSE
+        IF LTRIM$(RTRIM$(editorText$(1))) <> "" THEN hasCode = 1
+      END IF
+
+      IF hasCode = 1 THEN
+        compileState = COMP_REFINE
+        addStatusMsg "REFINING..."
+        redrawAll
+        dispScreenFlushUpdate
+
+        statusMsgCount = 1
+        editor.StatusScrollY = 1
+        editor.StatusSelectedIndex = 0
+        FOR ii = 1 TO 999
+          statusMsg(ii).Text = ""
+          statusMsg(ii).CodeLine = 0
+        NEXT
+
+        wFln$ = fileNameBase$ + ".exe"
+        IF _FILEEXISTS(wFln$) THEN
+          delCmd$ = "cmd /c del /F /Q " + CHR$(34) + wFln$ + CHR$(34)
+          SHELL _HIDE delCmd$
+
+          IF _FILEEXISTS(wFln$) THEN
+            addStatusMsg "OUTPUT FILE IN USE, PAUSING"
+            redrawAll
+            dispScreenFlushUpdate
+            waitTimer 1.5
+          END IF
+        END IF
+
+        waitKeyRelease "F5"
+      END IF
+    END IF
+  END IF
+
+  IF (_KEYDOWN(100306) OR _KEYDOWN(100305)) AND keyCheck("F") THEN
+    waitKeyRelease "F"
+    modalSearch
+  END IF
+
+  IF (_KEYDOWN(100306) OR _KEYDOWN(100305)) AND keyCheck("S") THEN
+    waitKeyRelease "S"
+    _KEYCLEAR
+
+    hasCode = 0
+    IF editor.LastLine > 1 THEN
+      hasCode = 1
+    ELSE
+      IF LTRIM$(RTRIM$(editorText$(1))) <> "" THEN hasCode = 1
+    END IF
+
+    IF hasCode = 1 THEN
+      editor.Focus = 1
+      curExt$ = ".BAS"
+      IF editor.FileExtensionMode = FILE_EXT_TXT THEN curExt$ = ".TXT"
+      IF editor.FileExtensionMode = FILE_EXT_BLB THEN curExt$ = ".BLB"
+
+      addStatusMsg "SAVING " + fileNameBase$ + curExt$ + "..."
+      redrawAll
+      dispScreenFlushUpdate
+
+      fileCodeSave
+
+      addStatusMsg "SAVED " + fileNameBase$ + curExt$
+    END IF
+  END IF
+
+  IF keyCheck("F3") THEN
+    waitKeyRelease "F3"
+    IF editorSearchQuery$ <> "" THEN
+      findEditorNext
+    ELSE
+      modalSearch
+    END IF
+  END IF
+
+  kVal = _KEYHIT
+  IF kVal = 0 THEN EXIT SUB
+
+  IF editor.Focus = 2 THEN
+    ' Ctrl+C (Copy)
+    IF kVal = 3 OR ((kVal = 99 OR kVal = 67) AND (_KEYDOWN(100306) OR _KEYDOWN(100305))) THEN
+      IF editor.StatusSelectedIndex > 0 THEN
+        hlStart = editor.StatusSelectedIndex
+        hlEnd = editor.StatusSelectedIndex
+        sLine = statusMsg(hlStart).CodeLine
+        IF sLine > 0 THEN
+          DO WHILE hlStart > 1
+            IF statusMsg(hlStart - 1).CodeLine = sLine THEN
+              IF LEFT$(statusMsg(hlStart).Text, 5) = "ERROR" OR LEFT$(statusMsg(hlStart).Text, 7) = "WARNING" THEN EXIT DO
+              hlStart = hlStart - 1
+            ELSE
+              EXIT DO
+            END IF
+          LOOP
+          DO WHILE hlEnd < statusMsgCount - 1
+            IF statusMsg(hlEnd + 1).CodeLine = sLine THEN
+              IF LEFT$(statusMsg(hlEnd + 1).Text, 5) = "ERROR" OR LEFT$(statusMsg(hlEnd + 1).Text, 7) = "WARNING" THEN EXIT DO
+              hlEnd = hlEnd + 1
+            ELSE
+              EXIT DO
+            END IF
+          LOOP
+        END IF
+
+        copyText$ = ""
+        FOR ii = hlStart TO hlEnd
+          copyText$ = copyText$ + LTRIM$(RTRIM$(statusMsg(ii).Text))
+          IF ii < hlEnd THEN copyText$ = copyText$ + " "
+        NEXT
+        IF copyText$ <> "" THEN _CLIPBOARD$ = copyText$
+      END IF
+      kVal = 0
+    END IF
+
+    ' Ctrl+X (Cut) - Treat as copy for status bar
+    IF kVal = 24 OR ((kVal = 120 OR kVal = 88) AND (_KEYDOWN(100306) OR _KEYDOWN(100305))) THEN
+      IF editor.StatusSelectedIndex > 0 THEN
+        hlStart = editor.StatusSelectedIndex
+        hlEnd = editor.StatusSelectedIndex
+        sLine = statusMsg(hlStart).CodeLine
+        IF sLine > 0 THEN
+          DO WHILE hlStart > 1
+            IF statusMsg(hlStart - 1).CodeLine = sLine THEN
+              IF LEFT$(statusMsg(hlStart).Text, 5) = "ERROR" OR LEFT$(statusMsg(hlStart).Text, 7) = "WARNING" THEN EXIT DO
+              hlStart = hlStart - 1
+            ELSE
+              EXIT DO
+            END IF
+          LOOP
+          DO WHILE hlEnd < statusMsgCount - 1
+            IF statusMsg(hlEnd + 1).CodeLine = sLine THEN
+              IF LEFT$(statusMsg(hlEnd + 1).Text, 5) = "ERROR" OR LEFT$(statusMsg(hlEnd + 1).Text, 7) = "WARNING" THEN EXIT DO
+              hlEnd = hlEnd + 1
+            ELSE
+              EXIT DO
+            END IF
+          LOOP
+        END IF
+
+        copyText$ = ""
+        FOR ii = hlStart TO hlEnd
+          copyText$ = copyText$ + LTRIM$(RTRIM$(statusMsg(ii).Text))
+          IF ii < hlEnd THEN copyText$ = copyText$ + " "
+        NEXT
+        IF copyText$ <> "" THEN _CLIPBOARD$ = copyText$
+      END IF
+      kVal = 0
+    END IF
+  END IF
+
+  IF editor.Focus = 1 THEN
+
+    lastLine = editor.LastLine
+    IF editor.CursorY > lastLine THEN lastLine = editor.CursorY
+
+    oldCursorY = editor.CursorY
+
+    ' Ctrl+Z (Undo)
+    IF kVal = 26 OR ((kVal = 122 OR kVal = 90) AND (_KEYDOWN(100306) OR _KEYDOWN(100305))) THEN
+      undo_StateRestore
+      kVal = 0
+      lastActionWasTyping = 0
+    END IF
+
+    ' Ctrl+C (Copy)
+    IF kVal = 3 OR ((kVal = 99 OR kVal = 67) AND (_KEYDOWN(100306) OR _KEYDOWN(100305))) THEN
+      IF editor.IsSelecting = 1 THEN
+        copyText$ = retEditorSelection$
+        IF copyText$ <> "" THEN _CLIPBOARD$ = copyText$
+      END IF
+      kVal = 0
+    END IF
+
+    ' Ctrl+X (Cut)
+    IF kVal = 24 OR ((kVal = 120 OR kVal = 88) AND (_KEYDOWN(100306) OR _KEYDOWN(100305))) THEN
+      IF editor.IsSelecting = 1 THEN
+        undo_StateSave
+        lastActionWasTyping = 0
+        copyText$ = retEditorSelection$
+        IF copyText$ <> "" THEN _CLIPBOARD$ = copyText$
+        deleteSelection
+        editor.IsSelecting = 0
+      END IF
+      kVal = 0
+    END IF
+
+    ' Ctrl+A (Select All)
+    IF kVal = 1 OR ((kVal = 97 OR kVal = 65) AND (_KEYDOWN(100306) OR _KEYDOWN(100305))) THEN
+      editor.SelectStartX = 0
+      editor.SelectStartY = 1
+      editor.CursorY = editor.LastLine
+      editor.CursorX = LEN(editorText$(editor.LastLine))
+      editor.IsSelecting = 1
+      kVal = 0
+    END IF
+
+    isMoveKey = 0
+    IF kVal = 19200 OR kVal = 19712 OR kVal = 18432 OR kVal = 20480 OR kVal = 18176 OR kVal = 20224 OR kVal = 18688 OR kVal = 20736 THEN isMoveKey = 1
+
+    IF isMoveKey = 1 THEN
+      lastActionWasTyping = 0
+      IF _KEYDOWN(100303) OR _KEYDOWN(100304) THEN
+        IF editor.IsSelecting = 0 THEN
+          editor.SelectStartX = editor.CursorX
+          editor.SelectStartY = editor.CursorY
+          editor.IsSelecting = 1
+        END IF
+      ELSE
+        editor.IsSelecting = 0
+      END IF
+    END IF
+
+    IF (kVal >= 32 AND kVal <= 126) OR kVal = 8 OR kVal = 212231 OR kVal = 21248 OR kVal = 13 OR kVal = 118 THEN
+      IF isMoveKey = 0 AND kVal <> 0 THEN
+        IF editor.IsSelecting = 1 THEN
+          undo_StateSave
+          IF (kVal >= 32 AND kVal <= 126) THEN
+            lastActionWasTyping = 1
+          ELSE
+            lastActionWasTyping = 0
+          END IF
+
+          IF kVal = 8 OR kVal = 212231 OR kVal = 21248 THEN
+            deleteSelection
+            editor.IsSelecting = 0
+            kVal = 0 ' Consume key to prevent normal backspace/delete
+          ELSE
+            IF (kVal >= 32 AND kVal <= 126) OR kVal = 13 THEN
+              deleteSelection
+              editor.IsSelecting = 0
+            ELSE
+              editor.IsSelecting = 0
+            END IF
+          END IF
+        END IF
+      END IF
+    END IF
+
+    IF kVal = 118 AND (_KEYDOWN(100306) OR _KEYDOWN(100305)) THEN ' Ctrl+V (Paste)
+      IF editor.IsSelecting = 0 THEN undo_StateSave
+      lastActionWasTyping = 0
+      pasteClipboardText
+      kVal = 0
+    END IF
+
+    ' Consume any remaining key presses if CTRL is held to prevent unmapped shortcut characters from dropping into the editor
+    IF (_KEYDOWN(100306) OR _KEYDOWN(100305)) THEN
+      IF kVal >= 32 AND kVal <= 126 THEN
+        kVal = 0
+      END IF
+    END IF
+
+    IF kVal >= 32 AND kVal <= 126 THEN ' Printable character
+      IF lastActionWasTyping = 0 THEN undo_StateSave
+      lastActionWasTyping = 1
+      currentLine$ = editorText$(editor.CursorY)
+      leftPart$ = LEFT$(currentLine$, editor.CursorX)
+      rightPart$ = MID$(currentLine$, editor.CursorX + 1)
+      editorText$(editor.CursorY) = leftPart$ + CHR$(kVal) + rightPart$
+      editor.CursorX = editor.CursorX + 1
+    END IF
+
+    IF kVal = 8 THEN ' Backspace
+      undo_StateSave
+      lastActionWasTyping = 0
+      IF editor.CursorX > 0 THEN ' Delete character to the left
+        currentLine$ = editorText$(editor.CursorY)
+        leftPart$ = LEFT$(currentLine$, editor.CursorX - 1)
+        rightPart$ = MID$(currentLine$, editor.CursorX + 1)
+        editorText$(editor.CursorY) = leftPart$ + rightPart$
+        editor.CursorX = editor.CursorX - 1
+      ELSE
+        IF editor.CursorY > 1 THEN ' Merge with previous line
+          prevLineLen = LEN(editorText$(editor.CursorY - 1))
+          editor.CursorX = prevLineLen
+          editorText$(editor.CursorY - 1) = editorText$(editor.CursorY - 1) + editorText$(editor.CursorY)
+          FOR ii = editor.CursorY TO editor.LastLine - 1
+            editorText$(ii) = editorText$(ii + 1)
+          NEXT
+          editorText$(editor.LastLine) = ""
+          editor.CursorY = editor.CursorY - 1
+          editor.LastLine = editor.LastLine - 1
+          IF editor.LastLine < 1 THEN editor.LastLine = 1
+        END IF
+      END IF
+    END IF
+
+    IF kVal = 212231 OR kVal = 21248 THEN ' Delete key
+      undo_StateSave
+      lastActionWasTyping = 0
+      currentLine$ = editorText$(editor.CursorY)
+      IF editor.CursorX < LEN(currentLine$) THEN ' Delete character to the right
+        leftPart$ = LEFT$(currentLine$, editor.CursorX)
+        rightPart$ = MID$(currentLine$, editor.CursorX + 2)
+        editorText$(editor.CursorY) = leftPart$ + rightPart$
+      ELSE
+        IF editor.CursorY < lastLine THEN ' Merge next line into current
+          editorText$(editor.CursorY) = currentLine$ + editorText$(editor.CursorY + 1)
+          FOR ii = editor.CursorY + 1 TO editor.LastLine - 1
+            editorText$(ii) = editorText$(ii + 1)
+          NEXT
+          editorText$(editor.LastLine) = ""
+          editor.LastLine = editor.LastLine - 1
+          IF editor.LastLine < 1 THEN editor.LastLine = 1
+        END IF
+      END IF
+    END IF
+
+    IF kVal = 13 THEN ' Enter key, split line at cursor
+      undo_StateSave
+      lastActionWasTyping = 0
+      IF editor.CursorY < EDITOR_LINE_MAX THEN
+        currentLine$ = editorText$(editor.CursorY)
+        leftPart$ = LEFT$(currentLine$, editor.CursorX)
+        rightPart$ = MID$(currentLine$, editor.CursorX + 1)
+        editorText$(editor.CursorY) = leftPart$
+        FOR ii = editor.LastLine TO editor.CursorY + 1 STEP -1
+          IF ii < EDITOR_LINE_MAX THEN
+            editorText$(ii + 1) = editorText$(ii)
+          END IF
+        NEXT
+        editorText$(editor.CursorY + 1) = rightPart$
+        editor.CursorY = editor.CursorY + 1
+        editor.CursorX = 0
+        editor.LastLine = editor.LastLine + 1
+        IF editor.LastLine > EDITOR_LINE_MAX THEN editor.LastLine = EDITOR_LINE_MAX
+        refineCode editor.CursorY - 1, 0
+      END IF
+    END IF
+
+    IF kVal = 19200 THEN ' Left arrow
+      IF editor.CursorX > 0 THEN
+        editor.CursorX = editor.CursorX - 1
+      ELSE
+        IF editor.CursorY > 1 THEN ' Wrap to end of previous line
+          editor.CursorY = editor.CursorY - 1
+          editor.CursorX = LEN(editorText$(editor.CursorY))
+        END IF
+      END IF
+    END IF
+
+    IF kVal = 19712 THEN ' Right arrow
+      IF editor.CursorX < LEN(editorText$(editor.CursorY)) THEN
+        editor.CursorX = editor.CursorX + 1
+      ELSE
+        IF editor.CursorY < lastLine THEN ' Wrap to start of next line
+          editor.CursorY = editor.CursorY + 1
+          editor.CursorX = 0
+        END IF
+      END IF
+    END IF
+
+    IF kVal = 18432 THEN ' Up arrow
+      IF editor.CursorY > 1 THEN
+        editor.CursorY = editor.CursorY - 1
+        IF editor.CursorX > LEN(editorText$(editor.CursorY)) THEN
+          editor.CursorX = LEN(editorText$(editor.CursorY))
+        END IF
+      END IF
+    END IF
+
+    IF kVal = 20480 THEN ' Down arrow
+      IF editor.CursorY < lastLine THEN
+        editor.CursorY = editor.CursorY + 1
+        IF editor.CursorX > LEN(editorText$(editor.CursorY)) THEN
+          editor.CursorX = LEN(editorText$(editor.CursorY))
+        END IF
+      END IF
+    END IF
+
+    IF kVal = 18176 THEN ' Home key, go to start of line
+      IF _KEYDOWN(100305) OR _KEYDOWN(100306) THEN
+        editor.CursorY = 1
+        editor.CursorX = 0
+        editor.ScrollY = 1
+        editor.ScrollX = 0
+      ELSE
+        editor.CursorX = 0
+      END IF
+    END IF
+
+    IF kVal = 20224 THEN ' End key, go to end of line
+      IF _KEYDOWN(100305) OR _KEYDOWN(100306) THEN
+        editor.CursorY = lastLine
+        editor.CursorX = LEN(editorText$(editor.CursorY))
+        editor.ScrollY = lastLine - 28
+        IF editor.ScrollY < 1 THEN editor.ScrollY = 1
+      ELSE
+        editor.CursorX = LEN(editorText$(editor.CursorY))
+      END IF
+    END IF
+
+    IF kVal = 18688 THEN ' Page up
+      IF _KEYDOWN(100305) OR _KEYDOWN(100306) THEN
+        targetY = 1
+        IF uiSubCount > 0 THEN
+          FOR ii = uiSubCount - 1 TO 0 STEP -1
+            startLine = uiSubLine(ii)
+            IF startLine + 1 < editor.CursorY THEN
+              targetY = startLine + 1
+              IF targetY > lastLine THEN targetY = lastLine
+              EXIT FOR
+            END IF
+          NEXT
+        END IF
+        editor.CursorY = targetY
+        editor.CursorX = 0
+        editor.ScrollY = editor.CursorY - 14
+        IF editor.ScrollY < 1 THEN editor.ScrollY = 1
+      ELSE
+        editor.CursorY = editor.CursorY - 29
+        IF editor.CursorY < 1 THEN editor.CursorY = 1
+        IF editor.CursorX > LEN(editorText$(editor.CursorY)) THEN editor.CursorX = LEN(editorText$(editor.CursorY))
+      END IF
+    END IF
+
+    IF kVal = 20736 THEN ' Page down
+      IF _KEYDOWN(100305) OR _KEYDOWN(100306) THEN
+        targetY = lastLine
+        FOR ii = editor.CursorY + 1 TO lastLine
+          uTemp$ = UCASE$(LTRIM$(RTRIM$(editorText$(ii))))
+          IF LEFT$(uTemp$, 8) = "END SUB" THEN
+            targetY = ii
+            EXIT FOR
+          END IF
+          IF LEFT$(uTemp$, 12) = "END FUNCTION" THEN
+            targetY = ii
+            EXIT FOR
+          END IF
+        NEXT
+        editor.CursorY = targetY
+        editor.CursorX = LEN(editorText$(editor.CursorY))
+        editor.ScrollY = editor.CursorY - 14
+        IF editor.ScrollY < 1 THEN editor.ScrollY = 1
+      ELSE
+        editor.CursorY = editor.CursorY + 29
+        IF editor.CursorY > lastLine THEN editor.CursorY = lastLine
+        IF editor.CursorX > LEN(editorText$(editor.CursorY)) THEN editor.CursorX = LEN(editorText$(editor.CursorY))
+      END IF
+    END IF
+
+    IF editor.CursorY < editor.ScrollY THEN editor.ScrollY = editor.CursorY
+    IF editor.CursorY >= editor.ScrollY + 29 THEN editor.ScrollY = editor.CursorY - 28
+
+    IF editor.CursorX < editor.ScrollX THEN editor.ScrollX = editor.CursorX
+    IF editor.CursorX >= editor.ScrollX + 56 THEN editor.ScrollX = editor.CursorX - 55
+
+    IF oldCursorY <> editor.CursorY THEN refineCode oldCursorY, 0
+
+  END IF
+
+END SUB ' processInput
+
+''''''''''''''''''''''''
+SUB showCursorData (baseX, baseY)
+
+  PrintStr baseX, baseY, "MSX:" + cTrNum$(mouse.PosX), 15, 0, 1
+  PrintStr baseX, baseY + 12, "MSY:" + cTrNum$(mouse.PosY), 15, 0, 1
+  PrintStr baseX, baseY + 24, "CX:" + cTrNum$(editor.CursorX), 15, 0, 1
+  PrintStr baseX, baseY + 36, "CY:" + cTrNum$(editor.CursorY), 15, 0, 1
+  displayFlashText
+
+END SUB ' showCursorData
+
+''''''''''''''''''''''''
+SUB return2 (wVal)
+
+  ' Return the global secondary return variable
+
+  returnF2data = wVal
+
+END SUB ' return2
+
+''''''''''''''''''''''''
+SUB return3 (wVal)
+
+  ' Return the global tertiary return value
+
+  returnF3data = wVal
+
+END SUB ' return3
+
+''''''''''''''''''''''''
+FUNCTION returnedData2
+
+  returnedData2 = returnF2data
+
+END FUNCTION ' returnedData2
+
+''''''''''''''''''''''''
+FUNCTION returnedData3
+
+  returnedData3 = returnF3data
+
+END FUNCTION ' returnedData3
+
+''''''''''''''''''''''''
+SUB returnExtraPrepare
+
+  ' Call at the top of any function that sends back return 2 or 3 data
+
+  returnF2data = 0
+  returnF3data = 0
+
+END SUB ' returnExtraPrepare
+
+''''''''''''''''''''''''
+SUB ZLOCATE (wX, wY)
+
+  LOCATE wY + 1, wX + 1
+
+END SUB ' ZLOCATE
+
+''''''''''''''''''''''''
+SUB ESCAPETEXT (wStr$)
+
+  DIM physicalSnapshot AS LONG
+  DIM escapeOverlay AS LONG
+
+  ' Do not call redrawAll here, can cause a hang in some cases
+  IF wStr$ = "" THEN wStr$ = "No text sent"
+
+  ' Capture every physical pixel already present on screen 0
+  _DEST 0
+  physicalSnapshot = _COPYIMAGE(0)
+
+  ' Create a logical-size overlay whose color 255 pixels remain untouched
+  escapeOverlay = _NEWIMAGE(SCREENSIZEX, SCREENSIZEY, 13)
+
+  _DEST escapeOverlay
+  _FONT 8
+  setPalettes256
+
+  LINE (0, 0)-(SCREENSIZEX - 1, SCREENSIZEY - 1), 255, BF
+
+  PrintTextLineWithBanners wStr$, 15, BOTTOM
+
+  pauseText$ = "Press any key to continue..."
+  PrintStr 0, SCREENSIZEY - 8, pauseText$, 15, 0, 1
+
+  ' Scale only actual escape overlay pixels onto the preserved physical snapshot
+  overlayScaledTransparent escapeOverlay, physicalSnapshot, 255
+
+  ' Present the completed physical snapshot without rebuilding it from logicalScreen
+  _DEST 0
+  _PUTIMAGE (0, 0)-(physicalScreenX - 1, physicalScreenY - 1), physicalSnapshot, 0
+
+  _DISPLAY
+
+  IF escapeOverlay < -1 THEN _FREEIMAGE escapeOverlay
+  IF physicalSnapshot < -1 THEN _FREEIMAGE physicalSnapshot
+
+  waitKeyRelease "ESC"
+  _KEYCLEAR
+
+  DO
+    limitSpeed
+  LOOP UNTIL _KEYHIT <> 0
+
+  SYSTEM
+
+END SUB ' ESCAPETEXT
+
+''''''''''''''''''''''''
+SUB ESCAPETEXT2 (wStr1$, wStr2$)
+
+  DIM physicalSnapshot AS LONG
+  DIM escapeOverlay AS LONG
+
+  ' Do not call redrawAll here, can cause a hang in some cases
+  IF wStr1$ = "" THEN wStr1$ = "No text sent"
+
+  ' Capture every physical pixel already present on screen 0
+  _DEST 0
+  physicalSnapshot = _COPYIMAGE(0)
+
+  fileOutputErrorReport wStr1$, wStr2$
+
+  ' Create a logical-size overlay whose color 255 pixels remain untouched
+  escapeOverlay = _NEWIMAGE(SCREENSIZEX, SCREENSIZEY, 13)
+
+  _DEST escapeOverlay
+  _FONT 8
+  setPalettes256
+
+  LINE (0, 0)-(SCREENSIZEX - 1, SCREENSIZEY - 1), 255, BF
+
+  boxW = SCREENSIZEX - 16
+  boxH = 34
+  boxX = 8
+  boxY = SCREENSIZEY - 128
+
+  drawBorderBox boxX, boxY, boxW, boxH, 1, 0
+  drawClearBox boxX + 1, boxY + 1, boxW - 2, boxH - 2, 15
+
+  PrintStr boxX + 8, boxY + 8, wStr1$, 15, 0, 0
+
+  IF wStr2$ <> "" THEN
+    PrintStr boxX + 8, boxY + 18, wStr2$, 15, 0, 0
+  END IF
+
+  pauseText$ = "Press any key to continue..."
+  PrintStr 0, SCREENSIZEY - 8, pauseText$, 15, 0, 1
+
+  ' Scale only actual escape overlay pixels onto the preserved physical snapshot
+  overlayScaledTransparent escapeOverlay, physicalSnapshot, 255
+
+  ' Present the completed physical snapshot without rebuilding it from logicalScreen
+  _DEST 0
+  _PUTIMAGE (0, 0)-(physicalScreenX - 1, physicalScreenY - 1), physicalSnapshot, 0
+
+  _DISPLAY
+
+  IF escapeOverlay < -1 THEN _FREEIMAGE escapeOverlay
+  IF physicalSnapshot < -1 THEN _FREEIMAGE physicalSnapshot
+
+  waitKeyRelease "ESC"
+  _KEYCLEAR
+
+  DO
+    limitSpeed
+  LOOP UNTIL _KEYHIT <> 0
+
+  SYSTEM
+
+END SUB ' ESCAPETEXT2
