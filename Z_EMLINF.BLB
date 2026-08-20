@@ -2,6 +2,14 @@
 ' The line with comment, dollar sign, and INCLUDE 'Z_EMLINF.BLB' at the end of the EmeraldBasic file link this code in QB64PE
 ' In EmeraldBasic, the '#INCLUDE command at the top does the work
 
+SUB addStatusMsg (wMsg$)
+
+  statusGroupCount = statusGroupCount + 1
+  addStatusMsgToGroup wMsg$, statusGroupCount
+
+END SUB ' addStatusMsg
+
+''''''''''''''''''''''''
 SUB checkEmergencyClose
 
   closeBtnW = 15
@@ -47,11 +55,81 @@ SUB confirmExit
 END SUB ' confirmExit
 
 ''''''''''''''''''''''''
+SUB createFont
+
+  CLS
+  COLOR 15
+
+  FOR iy = 0 TO 15
+    FOR ix = 0 TO 15
+      wASC = (iy * 16) + ix
+      ZLOCATE ix, iy
+      IF wASC <> 7 AND wASC <> 12 THEN PRINT CHR$(wASC)
+    NEXT
+  NEXT
+
+  FOR iy = 0 TO 144
+    FOR ix = 0 TO 127
+      fontData(ix, iy) = POINT(ix, iy)
+    NEXT
+  NEXT
+
+  CLS
+
+END SUB ' createFont
+
+''''''''''''''''''''''''
 FUNCTION cTrNum$ (wNum)
 
   cTrNum$ = LTRIM$(RTRIM$(STR$(wNum)))
 
 END FUNCTION ' cTrNum$
+
+''''''''''''''''''''''''
+SUB deleteSelection
+
+  IF editor.SelectStartX = editor.CursorX AND editor.SelectStartY = editor.CursorY THEN EXIT SUB
+
+  IF editor.SelectStartY < editor.CursorY OR (editor.SelectStartY = editor.CursorY AND editor.SelectStartX < editor.CursorX) THEN
+    startY = editor.SelectStartY
+    startX = editor.SelectStartX
+    endY = editor.CursorY
+    endX = editor.CursorX
+  ELSE
+    startY = editor.CursorY
+    startX = editor.CursorX
+    endY = editor.SelectStartY
+    endX = editor.SelectStartX
+  END IF
+
+  leftPart$ = LEFT$(editorText$(startY), startX)
+  rightPart$ = MID$(editorText$(endY), endX + 1)
+
+  editorText$(startY) = leftPart$ + rightPart$
+
+  linesToRemove = endY - startY
+  IF linesToRemove > 0 THEN
+    FOR ii = startY + 1 TO editor.LastLine - linesToRemove
+      editorText$(ii) = editorText$(ii + linesToRemove)
+    NEXT
+    FOR ii = editor.LastLine - linesToRemove + 1 TO editor.LastLine
+      editorText$(ii) = ""
+    NEXT
+    editor.LastLine = editor.LastLine - linesToRemove
+    IF editor.LastLine < 1 THEN editor.LastLine = 1
+  END IF
+
+  editor.CursorX = startX
+  editor.CursorY = startY
+  editor.SelectStartX = startX
+  editor.SelectStartY = startY
+
+  IF editor.CursorY < editor.ScrollY THEN editor.ScrollY = editor.CursorY
+  IF editor.CursorY >= editor.ScrollY + 28 THEN editor.ScrollY = editor.CursorY - 27
+  IF editor.CursorX < editor.ScrollX THEN editor.ScrollX = editor.CursorX
+  IF editor.CursorX >= editor.ScrollX + 56 THEN editor.ScrollX = editor.CursorX - 55
+
+END SUB ' deleteSelection
 
 ''''''''''''''''''''''''
 SUB displayFlashText
@@ -63,6 +141,16 @@ SUB displayFlashText
   END IF
 
 END SUB ' displayFlashText
+
+''''''''''''''''''''''''
+SUB dispScreenFlushUpdate
+
+  _DEST 0
+  _PUTIMAGE (0, 0)-(physicalScreenX - 1, physicalScreenY - 1), logicalScreen, 0
+  _DISPLAY
+  _DEST logicalScreen
+
+END SUB ' dispScreenFlushUpdate
 
 ''''''''''''''''''''''''
 SUB drawBorderBox (wPosX, wPosY, wSizeX, wSizeY, fgClr, bgClr)
@@ -505,6 +593,610 @@ SUB drawEditorPMI
 
 END SUB ' drawEditorPMI
 
+''''''''''''''''''''''''
+' Renders the primary interface buttons and handles their corresponding mouse click events to trigger file operations
+
+SUB drawButtonsPMI
+
+  editorBoxTop = editor.StartY
+
+  tabH = 16
+  tabOffset = tabH - 1
+
+  funcListBoxH = (13 * 10) + 4
+
+  ' Fast check to determine if file has code without looping over thousands of lines every frame
+  hasCode = 0
+  IF editor.LastLine > 1 THEN
+    hasCode = 1
+  ELSE
+    IF LTRIM$(RTRIM$(editorText$(1))) <> "" THEN hasCode = 1
+  END IF
+
+  curExt$ = ".BAS"
+  IF editor.FileExtensionMode = FILE_EXT_TXT THEN curExt$ = ".TXT"
+  IF editor.FileExtensionMode = FILE_EXT_BLB THEN curExt$ = ".BLB"
+
+  btnSaveTxtW = 122
+  btnSaveTxtH = 20
+  btnSaveTxtX = RIGHT_BOX_X
+  btnSaveTxtY = editorBoxTop + tabOffset + funcListBoxH + 8
+
+  IF hasCode = 0 THEN
+    btnSaveTxtBg = sysColor.gray
+  ELSE
+    btnSaveTxtBg = editor.windowBarClr
+  END IF
+
+  drawBorderBox btnSaveTxtX, btnSaveTxtY, btnSaveTxtW, btnSaveTxtH, 15, btnSaveTxtBg
+  PrintStr btnSaveTxtX + 28, btnSaveTxtY + 6, "SAVE FAST", 15, 0, 1
+
+  btnLoadTxtW = 122
+  btnLoadTxtH = 20
+  btnLoadTxtX = btnSaveTxtX
+  btnLoadTxtY = btnSaveTxtY + btnSaveTxtH + 8
+
+  drawBorderBox btnLoadTxtX, btnLoadTxtY, btnLoadTxtW, btnLoadTxtH, 15, editor.windowBarClr
+  PrintStr btnLoadTxtX + 28, btnLoadTxtY + 6, "LOAD FAST", 15, 0, 1
+
+  btnCompileW = 122
+  btnCompileH = 20
+  btnCompileX = btnSaveTxtX
+  btnCompileY = btnLoadTxtY + btnLoadTxtH + 8
+
+  IF compileState <> COMP_IDLE OR hasCode = 0 THEN
+    btnCompileBg = sysColor.gray
+  ELSE
+    btnCompileBg = editor.windowBarClr
+  END IF
+
+  drawBorderBox btnCompileX, btnCompileY, btnCompileW, btnCompileH, 15, btnCompileBg
+  PrintStr btnCompileX + 33, btnCompileY + 6, "COMPILE", 15, 0, 1
+
+  btnSearchW = 122
+  btnSearchH = 20
+  btnSearchX = btnSaveTxtX
+  btnSearchY = btnCompileY + btnCompileH + 8
+
+  IF hasCode = 0 THEN
+    btnSearchBg = sysColor.gray
+  ELSE
+    btnSearchBg = editor.windowBarClr
+  END IF
+
+  drawBorderBox btnSearchX, btnSearchY, btnSearchW, btnSearchH, 15, btnSearchBg
+  PrintStr btnSearchX + 37, btnSearchY + 6, "SEARCH", 15, 0, 1
+
+  '''' Saving
+  IF mouseClickedInBox(btnSaveTxtX, btnSaveTxtY, btnSaveTxtW, btnSaveTxtH) THEN
+    IF hasCode = 1 THEN
+      editor.Focus = 1
+      addStatusMsg "SAVING " + fileNameBase$ + curExt$ + "..."
+
+      ' Provide immediate visual feedback that the save process is active
+      drawBorderBox btnSaveTxtX, btnSaveTxtY, btnSaveTxtW, btnSaveTxtH, 15, sysColor.gray
+      PrintStr btnSaveTxtX + 28, btnSaveTxtY + 6, "SAVE FAST", 15, 0, 1
+
+      ' Complete the rest of the screen pipeline before halting for I/O
+      drawStatusPMI
+      drawTopMenuAndScrollPMI
+      drawFuncListPMI
+      drawCornerPMI
+      showCursorData SCREENSIZEX - 72, SCREENSIZEY - 48
+      _DEST 0
+      _PUTIMAGE (0, 0)-(physicalScreenX - 1, physicalScreenY - 1), logicalScreen, 0
+      _DISPLAY
+      _DEST logicalScreen
+
+      fileCodeSave
+
+      ' The normal redrawAll pipeline will complete after this function returns, restoring the blue button seamlessly
+      addStatusMsg "SAVED " + fileNameBase$ + curExt$
+    END IF
+  END IF
+
+  '''' Load
+  IF mouseClickedInBox(btnLoadTxtX, btnLoadTxtY, btnLoadTxtW, btnLoadTxtH) THEN
+    editor.Focus = 1
+    tempName$ = fileNameBase$ + curExt$
+
+    IF _FILEEXISTS(tempName$) THEN
+      addStatusMsg "LOADING " + fileNameBase$ + curExt$ + "..."
+
+      ' Provide immediate visual feedback that the load process is active
+      drawBorderBox btnLoadTxtX, btnLoadTxtY, btnLoadTxtW, btnLoadTxtH, 15, sysColor.gray
+      PrintStr btnLoadTxtX + 28, btnLoadTxtY + 6, "LOAD FAST", 15, 0, 1
+
+      ' Complete the rest of the screen pipeline before halting for I/O
+      drawStatusPMI
+      drawTopMenuAndScrollPMI
+      drawFuncListPMI
+      drawCornerPMI
+      showCursorData SCREENSIZEX - 72, SCREENSIZEY - 48
+      _DEST 0
+      _PUTIMAGE (0, 0)-(physicalScreenX - 1, physicalScreenY - 1), logicalScreen, 0
+      _DISPLAY
+      _DEST logicalScreen
+
+      fileCodeLoad
+      refineCode 0, 0
+
+      editor.CursorX = 0
+      editor.CursorY = 1
+      editor.ScrollY = 1
+      editor.ScrollX = 0
+      editor.SelectStartX = 0
+      editor.SelectStartY = 1
+      editor.IsSelecting = 0
+      editor.Focus = 1
+
+      addStatusMsg "LOADED " + fileNameBase$ + curExt$
+    ELSE
+      throwCompilerError tempName$ + " DOES NOT EXIST", ASIS, 0
+    END IF
+  END IF
+
+  '''' Compile
+  IF mouseClickedInBox(btnCompileX, btnCompileY, btnCompileW, btnCompileH) THEN
+    IF compileState = COMP_IDLE AND hasCode = 1 THEN
+      editor.Focus = 1
+
+      compileState = COMP_REFINE
+      addStatusMsg "REFINING..."
+      redrawAll
+      dispScreenFlushUpdate
+
+      statusMsgCount = 1
+      editor.StatusScrollY = 1
+      editor.StatusSelectedIndex = 0
+      FOR ii = 1 TO 999
+        statusMsg(ii).Text = ""
+        statusMsg(ii).CodeLine = 0
+      NEXT
+
+      wFln$ = fileNameBase$ + ".exe"
+      IF _FILEEXISTS(wFln$) THEN
+        delCmd$ = "cmd /c del /F /Q " + CHR$(34) + wFln$ + CHR$(34)
+        SHELL _HIDE delCmd$
+
+        IF _FILEEXISTS(wFln$) THEN
+          addStatusMsg "OUTPUT FILE IN USE, PAUSING"
+          redrawAll
+          dispScreenFlushUpdate
+          waitTimer 1.5
+        END IF
+      END IF
+    END IF
+  END IF
+
+  IF mouseClickedInBox(btnSearchX, btnSearchY, btnSearchW, btnSearchH) THEN
+    IF hasCode = 1 THEN
+      editor.Focus = 1
+      modalSearch
+    END IF
+  END IF
+
+END SUB ' drawButtonsPMI
+
+''''''''''''''''''''''''
+'' SUB drawClearBox (wPosX, wPosY, wSizeX, wSizeY, fgClr) ' This is found within Z_EMLINF.BLB
+'
+' Draws a hollow rectangular outline at the specified coordinates while ensuring it stays within screen bounds
+
+SUB drawCornerPMI
+
+  ' Renders the top right window control buttons and manages window state toggling such as fullscreen or exiting
+
+  closeBtnW = 15
+  closeBtnX = SCREENSIZEX - closeBtnW
+  closeBtnY = 0
+  closeBtnH = 13
+
+  dropW = 35
+  dropH = 15
+  dropX = SCREENSIZEX - dropW
+  dropY = 12
+
+  minW = 16
+  minH = 15
+  minX = dropX - minW + 1
+  minY = 12
+
+  stateBtnX = minX
+  stateBtnW = closeBtnX - minX + 1
+  stateBtnY = 0
+  stateBtnH = 13
+
+  IF editor.TopMenuFocus = 4 THEN
+    drawBorderBox closeBtnX, closeBtnY, closeBtnW, closeBtnH, 15, sysColor.gray
+    PrintStr closeBtnX + 4, closeBtnY + 3, "?", 15, 0, 1
+  ELSE
+    drawBorderBox closeBtnX, closeBtnY, closeBtnW, closeBtnH, 15, editor.CloseClr
+    PrintStr closeBtnX + 4, closeBtnY + 3, "X", 15, 0, 1
+  END IF
+
+  IF editor.WindowState = WIN_STATE_RES THEN stateText$ = "MED"
+  IF editor.WindowState = WIN_STATE_MED THEN stateText$ = "MAX"
+  IF editor.WindowState = WIN_STATE_MAX THEN stateText$ = "RES"
+
+  drawBorderBox stateBtnX, stateBtnY, stateBtnW, stateBtnH, 15, editor.windowBarClr
+  IF mouseWithinBoxBounds(stateBtnX, stateBtnY, stateBtnW, stateBtnH) THEN
+    drawClearBox stateBtnX + 1, stateBtnY + 1, stateBtnW - 2, stateBtnH - 2, 9
+  END IF
+  PrintStr stateBtnX + 6, stateBtnY + 3, stateText$, 15, 0, 1
+
+  IF editor.TopMenuFocus = 4 THEN
+    drawBorderBox dropX, dropY, dropW, dropH, 15, editor.windowBarClr
+    IF mouseWithinBoxBounds(dropX, dropY + 1, dropW, dropH - 1) THEN
+      drawClearBox dropX + 1, dropY + 1, dropW - 2, dropH - 2, editor.CloseClr
+    END IF
+    PrintStr dropX + 6, dropY + 4, "END", 15, 0, 1
+
+    drawBorderBox minX, minY, minW, minH, 15, editor.windowBarClr
+    IF mouseWithinBoxBounds(minX, minY + 1, minW, minH - 1) THEN
+      drawClearBox minX + 1, minY + 1, minW - 2, minH - 2, 9
+    END IF
+
+    LINE (minX + 4, minY + minH - 5)-(minX + minW - 5, minY + minH - 5), 15
+
+    LINE (minX - 1, dropY)-(minX - 1, dropY + dropH), 0
+    LINE (minX - 1, dropY + dropH)-(dropX + dropW - 1, dropY + dropH), 0
+
+    IF keyCheck("SPACE") THEN
+      editor.MenuClicked = 1
+      editor.WindowState = editor.WindowState + 1
+      IF editor.WindowState > 2 THEN editor.WindowState = 0
+      applyWindowState
+      editor.TopMenuFocus = 0
+      waitKeyRelease "SPACE"
+    END IF
+
+    IF keyCheck("*") THEN
+      editor.MenuClicked = 1
+      drawClearBox dropX + 1, dropY + 1, dropW - 2, dropH - 2, editor.CloseClr
+      dispScreenFlushUpdate
+      waitTimer 0.1
+      SYSTEM
+    END IF
+  END IF
+
+  IF mouseClickedInBox(closeBtnX, closeBtnY, closeBtnW, closeBtnH) THEN
+    IF editor.TopMenuFocus = 4 THEN
+      editor.TopMenuFocus = 0
+    ELSE
+      editor.TopMenuFocus = 4
+      editor.Focus = 0
+    END IF
+    editor.MenuClicked = 1
+  END IF
+
+  IF mouseClickedInBox(stateBtnX, stateBtnY, stateBtnW, stateBtnH) THEN
+    editor.MenuClicked = 1
+    editor.WindowState = editor.WindowState + 1
+    IF editor.WindowState > 2 THEN editor.WindowState = 0
+    applyWindowState
+    editor.TopMenuFocus = 0
+  END IF
+
+  IF editor.TopMenuFocus = 4 THEN
+    IF mouseClickedInBox(dropX, dropY + 1, dropW, dropH - 1) THEN
+      editor.MenuClicked = 1
+      mouse.Released1 = 0
+      SYSTEM
+    END IF
+
+    IF mouseClickedInBox(minX, minY + 1, minW, minH - 1) THEN
+      editor.MenuClicked = 1
+      _SCREENICON
+      editor.TopMenuFocus = 0
+    END IF
+
+    IF mouseClickedInBox(SCREENSIZEX - 35, 0, 35, 27) THEN editor.MenuClicked = 1
+  END IF
+
+END SUB ' drawCornerPMI
+
+''''''''''''''''''''''''
+'' SUB drawEditorPMI ' This is found within Z_EMLINF.BLB
+'
+' Renders the main code editor interface including the text area and scrollbars while handling text selection clicks
+
+''''''''''''''''''''''''
+SUB drawFuncListPMI
+
+  ' Renders the subroutine list on the right side of the screen or the edit context menu and processes navigation clicks
+
+  DIM copyGroupID AS _UNSIGNED LONG
+
+  editorBoxTop = editor.StartY
+
+  tabH = 16
+  tab1W = 62
+  tab2W = 61
+  tab1X = RIGHT_BOX_X
+  tab2X = RIGHT_BOX_X + 61
+  tabY = editorBoxTop
+
+  funcListBoxX = RIGHT_BOX_X
+  funcListBoxY = editorBoxTop + tabH - 1
+  funcListBoxW = 122
+  funcListBoxH = (13 * 10) + 4
+
+  scrollBarX = funcListBoxX + funcListBoxW - 10
+  scrollBarY = funcListBoxY
+  scrollBarW = 10
+  scrollBarH = funcListBoxH
+
+  ' Draw Tabs
+  IF editor.MenuMode = 0 THEN
+    tab1Bg = 19 'editor.windowBarClr ' Set FUNC as active
+    tab2Bg = sysColor.gray
+  ELSE
+    tab1Bg = sysColor.gray
+    tab2Bg = 19 'editor.windowBarClr ' set EDIT as active
+  END IF
+
+  drawBorderBox tab1X, tabY, tab1W, tabH, 15, tab1Bg
+  PrintStr tab1X + 16, tabY + 4, "FUNC", 15, 0, 1
+
+  drawBorderBox tab2X, tabY, tab2W, tabH, 15, tab2Bg
+  PrintStr tab2X + 17, tabY + 4, "EDIT", 15, 0, 1
+
+  ' Draw main box
+  drawBorderBox funcListBoxX, funcListBoxY, funcListBoxW, funcListBoxH, 15, 0
+
+  maxLines = 12
+
+  IF editor.MenuMode = 0 THEN
+    processVScrollbar SCROLL_FUNC, scrollBarX, scrollBarY, scrollBarW, scrollBarH, uiSubCount, maxLines, 0
+
+    PrintStr funcListBoxX + 25, funcListBoxY + 4, "GO TO TOP", 15, 0, 1
+    FOR ii = 0 TO 11
+      subIdx = ii + editor.FuncScroll.ScrollY
+      IF subIdx < uiSubCount THEN
+        sOutName$ = LEFT$(uiSubName$(subIdx), 13)
+
+        isCurrent = 0
+        startLine = uiSubLine(subIdx)
+        endLine = editor.LastLine
+        IF subIdx + 1 < uiSubCount THEN
+          endLine = uiSubLine(subIdx + 1) - 1
+        END IF
+
+        IF editor.CursorY >= startLine AND editor.CursorY <= endLine THEN
+          isCurrent = 1
+        END IF
+
+        IF isCurrent = 1 THEN
+          listColor = 15
+        ELSE
+          listColor = 11
+        END IF
+
+        PrintStr funcListBoxX + RIGHT_BOX_SPACING, funcListBoxY + ((ii + 1) * 10) + 4, sOutName$, listColor, 0, 1
+      END IF
+    NEXT
+  ELSE
+    IF editor.MenuMode = 1 THEN
+      hasSelection = 0
+      IF editor.IsSelecting = 1 THEN
+        IF editor.CursorY <> editor.SelectStartY OR editor.CursorX <> editor.SelectStartX THEN
+          hasSelection = 1
+        END IF
+      END IF
+
+      IF hasSelection = 1 THEN
+        PrintStr funcListBoxX + 15, funcListBoxY + 4, "CUT", 15, 0, 1
+        PrintStr funcListBoxX + 15, funcListBoxY + 14, "COPY", 15, 0, 1
+      ELSE
+        PrintStr funcListBoxX + 15, funcListBoxY + 4, "NO TEXT", sysColor.gray, 0, 1
+        PrintStr funcListBoxX + 15, funcListBoxY + 14, "SELECTED", sysColor.gray, 0, 1
+      END IF
+
+      PrintStr funcListBoxX + 15, funcListBoxY + 24, "PASTE", 15, 0, 1
+      PrintStr funcListBoxX + 15, funcListBoxY + 34, "CANCEL", 15, 0, 1
+    ELSE
+      IF editor.MenuMode = 2 THEN
+        PrintStr funcListBoxX + 15, funcListBoxY + 4, "COPY", 15, 0, 1
+        PrintStr funcListBoxX + 15, funcListBoxY + 14, "CANCEL", 15, 0, 1
+      END IF
+    END IF
+  END IF
+
+  ' Mouse Processing Logic
+  IF mouse.Wheel <> 0 THEN
+    IF mouseWithinBoxBounds(funcListBoxX, funcListBoxY, funcListBoxW, funcListBoxH) THEN
+      editor.FuncScroll.ScrollY = editor.FuncScroll.ScrollY + mouse.Wheel
+      maxFuncScroll = uiSubCount - maxLines
+      IF maxFuncScroll < 0 THEN maxFuncScroll = 0
+      IF editor.FuncScroll.ScrollY > maxFuncScroll THEN editor.FuncScroll.ScrollY = maxFuncScroll
+      IF editor.FuncScroll.ScrollY < 0 THEN editor.FuncScroll.ScrollY = 0
+    END IF
+  END IF
+
+  IF mouse.Released1 THEN
+    wasMenuMode1 = 0
+    wasMenuMode2 = 0
+
+    ' Handle Tab Clicks
+    IF mouseClickedInBox(tab1X, tabY, tab1W, tabH) THEN
+      editor.MenuMode = 0
+    END IF
+
+    IF mouseClickedInBox(tab2X, tabY, tab2W, tabH) THEN
+      editor.MenuMode = 1
+    END IF
+
+    IF editor.MenuMode = 1 THEN
+      wasMenuMode1 = 1
+
+      hasSelection = 0
+      IF editor.IsSelecting = 1 THEN
+        IF editor.CursorY <> editor.SelectStartY OR editor.CursorX <> editor.SelectStartX THEN
+          hasSelection = 1
+        END IF
+      END IF
+
+      IF hasSelection = 1 THEN
+        IF mouseClickedInBox(funcListBoxX, funcListBoxY + 3, funcListBoxW, 10) THEN
+          rowY = funcListBoxY + 3
+          LINE (funcListBoxX + 1, rowY)-(funcListBoxX + funcListBoxW - 2, rowY + 9), 1, BF
+          PrintStr funcListBoxX + 15, rowY + 1, "CUT", 15, 0, 1
+          dispScreenFlushUpdate
+          waitTimer UI_FLASH_TIME
+
+          undo_StateSave
+          lastActionWasTyping = 0
+
+          copyText$ = retEditorSelection$
+          IF copyText$ <> "" THEN _CLIPBOARD$ = copyText$
+          deleteSelection
+          editor.IsSelecting = 0
+          editor.MenuMode = 0
+        END IF
+
+        IF mouseClickedInBox(funcListBoxX, funcListBoxY + 13, funcListBoxW, 10) THEN
+          rowY = funcListBoxY + 13
+          LINE (funcListBoxX + 1, rowY)-(funcListBoxX + funcListBoxW - 2, rowY + 9), 1, BF
+          PrintStr funcListBoxX + 15, rowY + 1, "COPY", 15, 0, 1
+          dispScreenFlushUpdate
+          waitTimer UI_FLASH_TIME
+
+          copyText$ = retEditorSelection$
+          IF copyText$ <> "" THEN _CLIPBOARD$ = copyText$
+          editor.MenuMode = 0
+        END IF
+      END IF
+
+      IF mouseClickedInBox(funcListBoxX, funcListBoxY + 23, funcListBoxW, 10) THEN
+        rowY = funcListBoxY + 23
+        LINE (funcListBoxX + 1, rowY)-(funcListBoxX + funcListBoxW - 2, rowY + 9), 1, BF
+        PrintStr funcListBoxX + 15, rowY + 1, "PASTE", 15, 0, 1
+        dispScreenFlushUpdate
+        waitTimer UI_FLASH_TIME
+
+        undo_StateSave
+        lastActionWasTyping = 0
+
+        pasteClipboardText
+        editor.MenuMode = 0
+      END IF
+
+      IF mouseClickedInBox(funcListBoxX, funcListBoxY + 33, funcListBoxW, 10) THEN
+        rowY = funcListBoxY + 33
+        LINE (funcListBoxX + 1, rowY)-(funcListBoxX + funcListBoxW - 2, rowY + 9), 1, BF
+        PrintStr funcListBoxX + 15, rowY + 1, "CANCEL", 15, 0, 1
+        dispScreenFlushUpdate
+        waitTimer UI_FLASH_TIME
+
+        editor.MenuMode = 0
+      END IF
+    END IF
+
+    IF editor.MenuMode = 2 THEN
+      wasMenuMode2 = 1
+
+      IF mouseClickedInBox(funcListBoxX, funcListBoxY + 3, funcListBoxW, 10) THEN
+        rowY = funcListBoxY + 3
+        LINE (funcListBoxX + 1, rowY)-(funcListBoxX + funcListBoxW - 2, rowY + 9), 1, BF
+        PrintStr funcListBoxX + 15, rowY + 1, "COPY", 15, 0, 1
+        dispScreenFlushUpdate
+        waitTimer UI_FLASH_TIME
+
+        hlStart = editor.StatusSelectedIndex
+        hlEnd = editor.StatusSelectedIndex
+        IF hlStart > 0 THEN
+          copyGroupID = statusMsg(hlStart).GroupID
+          IF copyGroupID > 0 THEN
+            DO WHILE hlStart > 1
+              IF statusMsg(hlStart - 1).GroupID = copyGroupID THEN
+                hlStart = hlStart - 1
+              ELSE
+                EXIT DO
+              END IF
+            LOOP
+            DO WHILE hlEnd < statusMsgCount - 1
+              IF statusMsg(hlEnd + 1).GroupID = copyGroupID THEN
+                hlEnd = hlEnd + 1
+              ELSE
+                EXIT DO
+              END IF
+            LOOP
+          END IF
+        END IF
+
+        copyText$ = ""
+        FOR ii = hlStart TO hlEnd
+          copyText$ = copyText$ + LTRIM$(RTRIM$(statusMsg(ii).Text))
+          IF ii < hlEnd THEN copyText$ = copyText$ + " "
+        NEXT
+        IF copyText$ <> "" THEN _CLIPBOARD$ = copyText$
+
+        editor.MenuMode = 0
+      END IF
+
+      IF mouseClickedInBox(funcListBoxX, funcListBoxY + 13, funcListBoxW, 10) THEN
+        rowY = funcListBoxY + 13
+        LINE (funcListBoxX + 1, rowY)-(funcListBoxX + funcListBoxW - 2, rowY + 9), 1, BF
+        PrintStr funcListBoxX + 15, rowY + 1, "CANCEL", 15, 0, 1
+        dispScreenFlushUpdate
+        waitTimer UI_FLASH_TIME
+
+        editor.MenuMode = 0
+      END IF
+
+      IF mouseWithinBoxBounds(funcListBoxX, funcListBoxY, funcListBoxW, funcListBoxH) = 0 AND mouseWithinBoxBounds(tab1X, tabY, funcListBoxW, tabH) = 0 THEN
+        editor.MenuMode = 0
+      END IF
+    END IF
+
+    IF wasMenuMode1 = 0 AND wasMenuMode2 = 0 THEN
+      IF editor.MenuMode = 0 THEN
+        IF mouseClickedInBox(funcListBoxX, funcListBoxY, funcListBoxW - 10, funcListBoxH) THEN
+          clickRelY = mouse.PosY - (funcListBoxY + 3)
+          IF clickRelY < 0 THEN clickRelY = 0
+          clickedRow = clickRelY \ 10
+          IF clickedRow = 0 THEN
+            rowY = funcListBoxY + 3
+            LINE (funcListBoxX + 1, rowY)-(funcListBoxX + funcListBoxW - 11, rowY + 9), 1, BF
+            PrintStr funcListBoxX + 25, rowY + 1, "GO TO TOP", 15, 0, 1
+            dispScreenFlushUpdate
+            waitTimer UI_FLASH_TIME
+
+            editor.CursorY = 1
+            editor.CursorX = 0
+            editor.ScrollY = 1
+            editor.ScrollX = 0
+            editor.SelectStartX = 0
+            editor.SelectStartY = 1
+            editor.IsSelecting = 0
+          ELSE
+            subIdx = (clickedRow - 1) + editor.FuncScroll.ScrollY
+            IF subIdx < uiSubCount THEN
+              rowY = funcListBoxY + 3 + (clickedRow * 10)
+              LINE (funcListBoxX + 1, rowY)-(funcListBoxX + funcListBoxW - 11, rowY + 9), 1, BF
+              PrintStr funcListBoxX + RIGHT_BOX_SPACING, rowY + 1, LEFT$(uiSubName$(subIdx), 13), 15, 0, 1
+              dispScreenFlushUpdate
+              waitTimer UI_FLASH_TIME
+
+              editor.CursorY = uiSubLine(subIdx)
+              editor.CursorX = 0
+              editor.ScrollY = editor.CursorY - 14
+              IF editor.ScrollY < 1 THEN editor.ScrollY = 1
+              editor.ScrollX = 0
+              editor.SelectStartX = 0
+              editor.SelectStartY = 1
+              editor.IsSelecting = 0
+            END IF
+          END IF
+        END IF
+      END IF
+    END IF
+  END IF
+
+END SUB ' drawFuncListPMI
+
+''''''''''''''''''''''''
 SUB drawStatusPMI
 
   editorBoxTop = editor.StartY
@@ -944,6 +1636,640 @@ SUB drawTopMenuAndScrollPMI
   END IF
 
 END SUB ' drawTopMenuAndScrollPMI
+
+''''''''''''''''''''''''
+FUNCTION hexLen$ (wVal, wLen)
+
+  outStr$ = HEX$(wVal)
+  FOR ii = 0 TO 2
+    IF LEN(outStr$) < wLen THEN
+      outStr$ = "0" + outStr$
+    END IF
+  NEXT
+
+  hexLen$ = outStr$
+
+END FUNCTION ' hexLen$
+
+''''''''''''''''''''''''
+SUB initColors
+
+  sysColor.flashTextClr = 14
+  sysColor.gray = 8
+  sysColor.focusBorder = 10
+
+  editor.windowBarClr = 208
+  editor.CloseClr = 32
+
+END SUB ' initColors
+
+''''''''''''''''''''''''
+SUB initFileNames
+
+  fileNameBase$ = "DFLTNAME"
+  fileNameErr$ = "ErrorReport.txt"
+  editor.FileExtensionMode = FILE_EXT_BAS
+
+END SUB ' initFileNames
+
+''''''''''''''''''''''''
+''''''''''''''''''''''''
+''''''''''''''''''''''''
+FUNCTION keyCheck (rsKeyString$) ' KeyCheck fast (Follow up with waitKeyRelease to use as slow option)
+
+  wStr$ = UCASE$(rsKeyString$) ' The character that's being checked for. Should be sent uppercase, but just in case
+  ' since _KEYDOWN does not return a value, this function polls for key presses and return the value pressed
+  ' This function will also help keep track of the special codes that keyDown uses. Only the
+  ' codes that have specifically been entered, plus a-z, A-Z (calculated by formula) will work
+  ' Returns the value of the key pressed. if keyCheck(whatever$) works just fine, because it
+  ' checks to see if the return is greater than zero
+
+  rVal = 0 ' In case we want to copy into a global "last key pressed" tracker
+
+  IF wStr$ = "*" THEN ' * KEY
+    IF _KEYDOWN(42) THEN
+      keyCheck = 42
+      EXIT FUNCTION
+    END IF
+  END IF
+
+  IF wStr$ = "ESC" THEN ' Escape key
+    IF _KEYDOWN(27) THEN
+      keyCheck = 27
+      EXIT FUNCTION
+    END IF
+  END IF
+
+  IF wStr$ = "SPACE" THEN ' Space key
+    IF _KEYDOWN(32) THEN
+      keyCheck = 32
+      EXIT FUNCTION
+    END IF
+  END IF
+
+  IF wStr$ = "TAB" THEN ' Tab key
+    IF _KEYDOWN(9) THEN
+      keyCheck = 9
+      EXIT FUNCTION
+    END IF
+  END IF
+
+  ' Detect a-z, A-Z, these match ASCII exactly
+  IF LEN(wStr$) = 1 THEN ' Handles characters A-Z, uppercase A is 65
+    wVal = ASC(wStr$)
+    IF ((wVal >= 65) AND (wVal <= 90)) OR ((wVal >= 97) AND (wVal <= 122)) THEN
+      IF _KEYDOWN(wVal) OR _KEYDOWN(wVal + 32) THEN ' The +32 is for lowercase
+        keyCheck = wVal
+        EXIT FUNCTION
+      END IF
+    END IF
+  END IF
+
+  IF LEN(wStr$) = 2 AND MID$(wStr$, 1, 1) = "F" THEN ' Handles characters A-Z, uppercase A is 65
+
+    SELECT CASE MID$(wStr$, 2, 1)
+
+      CASE "1": rVal = 15104
+      CASE "2": rVal = 15360
+      CASE "3": rVal = 15616
+      CASE "4": rVal = 15872
+      CASE "5": rVal = 16128
+      CASE "6": rVal = 16384
+      CASE "7": rVal = 16640
+      CASE "8": rVal = 16896
+      CASE "9": rVal = 17152
+      CASE "A": rVal = 17408
+      CASE "B": rVal = 34048
+      CASE "C": rVal = 34304
+      CASE ELSE: EXIT FUNCTION
+
+    END SELECT ' MID$(wStr$, 2, 1)
+
+    IF _KEYDOWN(rVal) THEN
+      keyCheck = rVal
+      EXIT FUNCTION
+    ELSE
+      keyCheck = 0
+      EXIT FUNCTION
+    END IF
+
+  END IF ' a-z, A-Z
+
+  IF wStr$ = "0" THEN ' KEY 0, KEY INS
+    IF _KEYDOWN(48) OR _KEYDOWN(20992) THEN rVal = 48
+    keyCheck = rVal
+    EXIT FUNCTION
+  END IF
+
+  ' Arrow keys and number pad for controls (not used yet)
+  IF wStr$ = "2" OR wStr$ = "DOWN" THEN
+    IF _KEYDOWN(50) OR _KEYDOWN(20480) THEN rVal = 50 ' KEY 2, KEY DOWN
+    keyCheck = rVal
+    EXIT FUNCTION
+  END IF
+
+  IF wStr$ = "3" THEN
+    IF _KEYDOWN(51) OR _KEYDOWN(20736) THEN rVal = 51 ' KEY 3
+    keyCheck = rVal
+    EXIT FUNCTION
+  END IF
+
+  IF wStr$ = "4" OR wStr$ = "LEFT" THEN
+    IF _KEYDOWN(52) OR _KEYDOWN(19200) THEN rVal = 52 ' KEY 4, KEY LEFT
+    keyCheck = rVal
+    EXIT FUNCTION
+  END IF
+
+  IF wStr$ = "6" OR wStr$ = "RIGHT" THEN
+    IF _KEYDOWN(54) OR _KEYDOWN(19712) THEN rVal = 54 ' KEY 6, KEY RIGHT
+    keyCheck = rVal
+    EXIT FUNCTION
+  END IF
+
+  IF wStr$ = "8" OR wStr$ = "UP" THEN
+    IF _KEYDOWN(56) OR _KEYDOWN(18432) THEN rVal = 56 ' KEY 8, KEY UP
+    keyCheck = rVal
+    EXIT FUNCTION
+  END IF
+
+  ' Key - or key _
+  IF wStr$ = "-" THEN
+    IF _KEYDOWN(45) OR _KEYDOWN(95) THEN rVal = 45
+    keyCheck = rVal
+    EXIT FUNCTION
+  END IF
+
+  ' Key = or key +
+  IF wStr$ = "=" THEN
+    IF _KEYDOWN(61) OR _KEYDOWN(43) THEN rVal = 61
+    keyCheck = rVal
+    EXIT FUNCTION
+  END IF
+
+  ' Key \ (right above enter on the keyboard)
+  IF wStr$ = "\" THEN
+    IF _KEYDOWN(124) OR _KEYDOWN(92) THEN rVal = 124
+    keyCheck = rVal
+    EXIT FUNCTION
+  END IF
+
+  IF wStr$ = "<" THEN
+    IF _KEYDOWN(60) OR _KEYDOWN(44) THEN rVal = 60
+    keyCheck = rVal
+    EXIT FUNCTION
+  END IF
+
+  IF wStr$ = ">" THEN
+    IF _KEYDOWN(62) OR _KEYDOWN(46) THEN rVal = 62
+    keyCheck = rVal
+    EXIT FUNCTION
+  END IF
+
+  IF wStr$ = "'" THEN
+    IF _KEYDOWN(34) OR _KEYDOWN(39) THEN rVal = 34
+    keyCheck = rVal
+    EXIT FUNCTION
+  END IF
+
+  IF wStr$ = "/" THEN
+    IF _KEYDOWN(63) OR _KEYDOWN(47) THEN rVal = 63
+    keyCheck = rVal
+    EXIT FUNCTION
+  END IF
+
+  IF wStr$ = "ENT" THEN ' ENTER key
+    IF _KEYDOWN(13) THEN rVal = 13
+    keyCheck = rVal
+    EXIT FUNCTION
+  END IF
+
+  IF wStr$ = "PGUP" THEN
+    IF _KEYDOWN(18688) THEN rVal = 18688
+    keyCheck = rVal
+    EXIT FUNCTION
+  END IF
+
+  IF wStr$ = "PGDN" THEN
+    IF _KEYDOWN(20736) THEN rVal = 20736
+    keyCheck = rVal
+    EXIT FUNCTION
+  END IF
+
+  IF wStr$ = "HOME" THEN
+    IF _KEYDOWN(18176) THEN rVal = 18176
+    keyCheck = rVal
+    EXIT FUNCTION
+  END IF
+
+  IF wStr$ = "END" THEN
+    IF _KEYDOWN(20224) THEN rVal = 20224
+    keyCheck = rVal
+    EXIT FUNCTION
+  END IF
+
+  IF wStr$ = "[" THEN ' Key [ or {
+    IF _KEYDOWN(123) OR _KEYDOWN(91) THEN rVal = 123
+    keyCheck = rVal
+    EXIT FUNCTION
+  END IF
+
+  IF wStr$ = "]" THEN ' Key ] or }
+    IF _KEYDOWN(125) OR _KEYDOWN(93) THEN rVal = 125
+    keyCheck = rVal
+    EXIT FUNCTION
+  END IF
+
+  keyCheck = rVal ' Always returns uppercase equivalent
+
+END FUNCTION ' keyCheck
+
+''''''''''''''''''''''''
+SUB limitSpeed
+
+  ' Only throttle program execution speed to 60 FPS if there is no compilation active
+  IF compileState = COMP_IDLE THEN
+    _LIMIT 60
+  END IF
+
+END SUB ' limitSpeed
+
+''''''''''''''''''''''''
+SUB initLayout
+
+  DIM wa AS dataTypeRect
+  DIM ff AS LONG
+
+  editor.StartY = 15
+
+  editor.CursorY = 1
+  editor.ScrollY = 1
+  editor.LastLine = 1
+  editor.SelectStartY = 1
+  editor.TabSize = 2
+
+  editorText$(0) = "LINE 0: YOU SHOULD NEVER SEE THIS"
+  compileText$(0) = "LINE 0: YOU SHOULD NEVER SEE THIS"
+
+  statusMsg(0).Text = "LINE 0: YOU SHOULD NEVER SEE THIS"
+  statusMsg(0).CodeLine = 0
+  statusMsgCount = 1
+  editor.StatusScrollY = 1
+  editor.StatusSelectedIndex = 0
+
+  layout.FramebufSize = FRAMEBUF_MAX_WIDTH * FRAMEBUF_MAX_HEIGHT
+  layout.GfxBufEntrySize = 256
+
+  tempSize = layout.GfxBufEntrySize
+  shiftCount = 0
+  DO WHILE tempSize > 1
+    tempSize = tempSize \ 2
+    shiftCount = shiftCount + 1
+  LOOP
+  layout.GfxBufEntryShift = shiftCount
+
+  IF (2 ^ layout.GfxBufEntryShift) <> layout.GfxBufEntrySize THEN
+    ESCAPETEXT "COMPILER FAIL: GfxBufEntryShift calculation failed"
+  END IF
+
+  ' Record the true native resolution of the monitor
+  nativeScreenWidth = _DESKTOPWIDTH
+  nativeScreenHeight = _DESKTOPHEIGHT
+
+  ' Determine the taskbar height by subtracting the Windows work area height from the native screen height
+  ff = SystemParametersInfoA&(SPI_GETWORKAREA, 0, _OFFSET(wa), 0)
+  IF ff <> 0 AND wa.Bottom > wa.Top THEN
+    taskbarHeight = nativeScreenHeight - (wa.Bottom - wa.Top)
+  ELSE
+    taskbarHeight = 0
+  END IF
+
+END SUB ' initLayout
+
+''''''''''''''''''''''''
+SUB initPalettesBmp
+
+  ' 0-15 Standard VGA-style palette
+  bmpPal256(0, palRED) = 0: bmpPal256(0, palGREEN) = 0: bmpPal256(0, palBLUE) = 0 ' Black
+  bmpPal256(1, palRED) = 0: bmpPal256(1, palGREEN) = 0: bmpPal256(1, palBLUE) = 170 ' Blue
+  bmpPal256(2, palRED) = 0: bmpPal256(2, palGREEN) = 170: bmpPal256(2, palBLUE) = 0 ' Green
+  bmpPal256(3, palRED) = 0: bmpPal256(3, palGREEN) = 170: bmpPal256(3, palBLUE) = 170 ' Cyan
+  bmpPal256(4, palRED) = 170: bmpPal256(4, palGREEN) = 0: bmpPal256(4, palBLUE) = 0 ' Red
+  bmpPal256(5, palRED) = 170: bmpPal256(5, palGREEN) = 0: bmpPal256(5, palBLUE) = 170 ' Magenta
+  bmpPal256(6, palRED) = 170: bmpPal256(6, palGREEN) = 85: bmpPal256(6, palBLUE) = 0 ' Brown
+  bmpPal256(7, palRED) = 170: bmpPal256(7, palGREEN) = 170: bmpPal256(7, palBLUE) = 170 ' Light Gray
+  bmpPal256(8, palRED) = 85: bmpPal256(8, palGREEN) = 85: bmpPal256(8, palBLUE) = 85 ' Dark Gray
+  bmpPal256(9, palRED) = 85: bmpPal256(9, palGREEN) = 85: bmpPal256(9, palBLUE) = 255 ' Light Blue
+  bmpPal256(10, palRED) = 85: bmpPal256(10, palGREEN) = 255: bmpPal256(10, palBLUE) = 85 ' Light Green
+  bmpPal256(11, palRED) = 85: bmpPal256(11, palGREEN) = 255: bmpPal256(11, palBLUE) = 255 ' Light Cyan
+  bmpPal256(12, palRED) = 255: bmpPal256(12, palGREEN) = 85: bmpPal256(12, palBLUE) = 85 ' Light Red
+  bmpPal256(13, palRED) = 255: bmpPal256(13, palGREEN) = 85: bmpPal256(13, palBLUE) = 255 ' Light Magenta
+  bmpPal256(14, palRED) = 255: bmpPal256(14, palGREEN) = 255: bmpPal256(14, palBLUE) = 85 ' Yellow
+  bmpPal256(15, palRED) = 255: bmpPal256(15, palGREEN) = 255: bmpPal256(15, palBLUE) = 255 ' Bright White
+
+  ' 16-191 Red spectrum: dim red to bright red
+  FOR ii = 16 TO 191
+    redVal = ((ii - 16) * 255) \ 175
+    bmpPal256(ii, palRED) = redVal
+    bmpPal256(ii, palGREEN) = 0
+    bmpPal256(ii, palBLUE) = 0
+  NEXT
+
+  ' 192-255 Blue spectrum: dark blue to bright blue
+  FOR ii = 192 TO 255
+    blueVal = ((ii - 192) * 255) \ 63
+    bmpPal256(ii, palRED) = 0
+    bmpPal256(ii, palGREEN) = 0
+    bmpPal256(ii, palBLUE) = blueVal
+  NEXT
+
+END SUB ' initPalettesBmp
+
+''''''''''''''''''''''''
+SUB initPalettesOutput
+
+  ' 0-15 Standard VGA-style palette for output.exe
+  outputPal(0, palRED) = 0: outputPal(0, palGREEN) = 0: outputPal(0, palBLUE) = 0 ' Black
+  outputPal(1, palRED) = 0: outputPal(1, palGREEN) = 0: outputPal(1, palBLUE) = 170 ' Blue
+  outputPal(2, palRED) = 0: outputPal(2, palGREEN) = 170: outputPal(2, palBLUE) = 0 ' Green
+  outputPal(3, palRED) = 0: outputPal(3, palGREEN) = 170: outputPal(3, palBLUE) = 170 ' Cyan
+  outputPal(4, palRED) = 170: outputPal(4, palGREEN) = 0: outputPal(4, palBLUE) = 0 ' Red
+  outputPal(5, palRED) = 170: outputPal(5, palGREEN) = 0: outputPal(5, palBLUE) = 170 ' Magenta
+  outputPal(6, palRED) = 170: outputPal(6, palGREEN) = 85: outputPal(6, palBLUE) = 0 ' Brown
+  outputPal(7, palRED) = 170: outputPal(7, palGREEN) = 170: outputPal(7, palBLUE) = 170 ' Light Gray
+  outputPal(8, palRED) = 85: outputPal(8, palGREEN) = 85: outputPal(8, palBLUE) = 85 ' Dark Gray
+  outputPal(9, palRED) = 85: outputPal(9, palGREEN) = 85: outputPal(9, palBLUE) = 255 ' Light Blue
+  outputPal(10, palRED) = 85: outputPal(10, palGREEN) = 255: outputPal(10, palBLUE) = 85 ' Light Green
+  outputPal(11, palRED) = 85: outputPal(11, palGREEN) = 255: outputPal(11, palBLUE) = 255 ' Light Cyan
+  outputPal(12, palRED) = 255: outputPal(12, palGREEN) = 85: outputPal(12, palBLUE) = 85 ' Light Red
+  outputPal(13, palRED) = 255: outputPal(13, palGREEN) = 85: outputPal(13, palBLUE) = 255 ' Light Magenta
+  outputPal(14, palRED) = 255: outputPal(14, palGREEN) = 255: outputPal(14, palBLUE) = 85 ' Yellow
+  outputPal(15, palRED) = 255: outputPal(15, palGREEN) = 255: outputPal(15, palBLUE) = 255 ' Bright White
+
+  FOR ii = 16 TO 255
+    outputPal(ii, palRED) = 0
+    outputPal(ii, palGREEN) = 0
+    outputPal(ii, palBLUE) = 0
+  NEXT
+
+END SUB ' initPalettesOutput
+
+''''''''''''''''''''''''
+SUB initPalettesVGA
+
+  ' 0-15 Standard VGA-style palette
+  bmpPal256(0, palRED) = 0: bmpPal256(0, palGREEN) = 0: bmpPal256(0, palBLUE) = 0 ' Black
+  bmpPal256(1, palRED) = 0: bmpPal256(1, palGREEN) = 0: bmpPal256(1, palBLUE) = 170 ' Blue
+  bmpPal256(2, palRED) = 0: bmpPal256(2, palGREEN) = 170: bmpPal256(2, palBLUE) = 0 ' Green
+  bmpPal256(3, palRED) = 0: bmpPal256(3, palGREEN) = 170: bmpPal256(3, palBLUE) = 170 ' Cyan
+  bmpPal256(4, palRED) = 170: bmpPal256(4, palGREEN) = 0: bmpPal256(4, palBLUE) = 0 ' Red
+  bmpPal256(5, palRED) = 170: bmpPal256(5, palGREEN) = 0: bmpPal256(5, palBLUE) = 170 ' Magenta
+  bmpPal256(6, palRED) = 170: bmpPal256(6, palGREEN) = 85: bmpPal256(6, palBLUE) = 0 ' Brown
+  bmpPal256(7, palRED) = 170: bmpPal256(7, palGREEN) = 170: bmpPal256(7, palBLUE) = 170 ' Light gray
+  bmpPal256(8, palRED) = 85: bmpPal256(8, palGREEN) = 85: bmpPal256(8, palBLUE) = 85 ' Dark gray
+  bmpPal256(9, palRED) = 85: bmpPal256(9, palGREEN) = 85: bmpPal256(9, palBLUE) = 255 ' Light blue
+  bmpPal256(10, palRED) = 85: bmpPal256(10, palGREEN) = 255: bmpPal256(10, palBLUE) = 85 ' Light green
+  bmpPal256(11, palRED) = 85: bmpPal256(11, palGREEN) = 255: bmpPal256(11, palBLUE) = 255 ' Light cyan
+  bmpPal256(12, palRED) = 255: bmpPal256(12, palGREEN) = 85: bmpPal256(12, palBLUE) = 85 ' Light red
+  bmpPal256(13, palRED) = 255: bmpPal256(13, palGREEN) = 85: bmpPal256(13, palBLUE) = 255 ' Light magenta
+  bmpPal256(14, palRED) = 255: bmpPal256(14, palGREEN) = 255: bmpPal256(14, palBLUE) = 85 ' Yellow
+  bmpPal256(15, palRED) = 255: bmpPal256(15, palGREEN) = 255: bmpPal256(15, palBLUE) = 255 ' Bright white
+
+  ' 17-31 Green spectrum: dark green to light green
+  FOR ii = 17 TO 31
+    greenVal = 48 + (((ii - 17) * 207) \ 14)
+    bmpPal256(ii, palRED) = 0
+    bmpPal256(ii, palGREEN) = greenVal
+    bmpPal256(ii, palBLUE) = 0
+  NEXT
+
+  ' 32-191 Red spectrum: dark red to bright red
+  FOR ii = 32 TO 191
+    redVal = ((ii - 32) * 255) \ 159
+    bmpPal256(ii, palRED) = redVal
+    bmpPal256(ii, palGREEN) = 0
+    bmpPal256(ii, palBLUE) = 0
+  NEXT
+
+  ' 192-255 Blue spectrum: dark blue to bright blue
+  FOR ii = 192 TO 255
+    blueVal = ((ii - 192) * 255) \ 63
+    bmpPal256(ii, palRED) = 0
+    bmpPal256(ii, palGREEN) = 0
+    bmpPal256(ii, palBLUE) = blueVal
+  NEXT
+
+END SUB ' initPalettesVGA
+
+''''''''''''''''''''''''
+''''''''''''''''''''''''
+SUB loadIncludesAndBaseCode
+
+  compileLastLine = 0
+  FOR iy = 1 TO editor.LastLine
+    compileLastLine = compileLastLine + 1
+    compileText$(compileLastLine) = editorText$(iy)
+    editorLineLinkMap(compileLastLine) = iy
+  NEXT
+
+  FOR iy = 1 TO editor.LastLine
+    tempScan$ = UCASE$(LTRIM$(RTRIM$(editorText$(iy))))
+    origDir$ = LTRIM$(RTRIM$(editorText$(iy)))
+
+    IF LEFT$(tempScan$, 1) = "'" THEN
+      tempScan$ = LTRIM$(MID$(tempScan$, 2))
+      origDir$ = LTRIM$(MID$(origDir$, 2))
+    ELSE
+      IF LEFT$(tempScan$, 4) = "REM " OR tempScan$ = "REM" THEN
+        tempScan$ = LTRIM$(MID$(tempScan$, 5))
+        origDir$ = LTRIM$(MID$(origDir$, 5))
+      END IF
+    END IF
+
+    IF LEFT$(tempScan$, 8) = "#INCLUDE" THEN
+      qStart = INSTR(origDir$, CHR$(34))
+      IF qStart > 0 THEN
+        qEnd = INSTR(qStart + 1, origDir$, CHR$(34))
+        IF qEnd > 0 THEN
+          fName$ = MID$(origDir$, qStart + 1, qEnd - qStart - 1)
+          IF _FILEEXISTS(fName$) THEN
+            ffTmp = FREEFILE
+            OPEN fName$ FOR BINARY AS #ffTmp
+            fileLen = LOF(ffTmp)
+            IF fileLen > 0 THEN
+              fullText$ = SPACE$(fileLen)
+              GET #ffTmp, , fullText$
+              startPos = 1
+              DO WHILE startPos <= fileLen
+                nextNl = INSTR(startPos, fullText$, CHR$(10))
+                IF nextNl > 0 THEN
+                  chunkLen = nextNl - startPos
+                  IF chunkLen > 0 THEN
+                    IF ASC(fullText$, nextNl - 1) = 13 THEN chunkLen = chunkLen - 1
+                    IF chunkLen > 0 AND compileLastLine < COMPILE_LINE_MAX THEN
+                      compileLastLine = compileLastLine + 1
+                      compileText$(compileLastLine) = MID$(fullText$, startPos, chunkLen)
+                      editorLineLinkMap(compileLastLine) = iy
+                    ELSE
+                      IF chunkLen > 0 THEN
+                        throwCompilerError "COMPILE LINE LIMIT EXCEEDED", ASIS, 0
+                        EXIT SUB
+                      END IF
+                    END IF
+                  END IF
+                  startPos = nextNl + 1
+                ELSE
+                  chunkLen = fileLen - startPos + 1
+                  IF chunkLen > 0 THEN
+                    IF ASC(fullText$, fileLen) = 13 THEN chunkLen = chunkLen - 1
+                    IF chunkLen > 0 AND compileLastLine < COMPILE_LINE_MAX THEN
+                      compileLastLine = compileLastLine + 1
+                      compileText$(compileLastLine) = MID$(fullText$, startPos, chunkLen)
+                      editorLineLinkMap(compileLastLine) = iy
+                    ELSE
+                      IF chunkLen > 0 THEN
+                        throwCompilerError "COMPILE LINE LIMIT EXCEEDED", ASIS, 0
+                        EXIT SUB
+                      END IF
+                    END IF
+                  END IF
+                  EXIT DO
+                END IF
+              LOOP
+            END IF
+            CLOSE #ffTmp
+          ELSE
+            currentLineNumber = iy
+            throwCompilerError "INCLUDE FILE NOT FOUND: " + fName$, ASIS, 0
+            EXIT SUB
+          END IF
+        ELSE
+          currentLineNumber = iy
+          throwCompilerError "#INCLUDE REQUIRES FILE NAME IN DOUBLE QUOTES", ASIS, 0
+          EXIT SUB
+        END IF
+      ELSE
+        currentLineNumber = iy
+        throwCompilerError "#INCLUDE REQUIRES FILE NAME IN DOUBLE QUOTES", ASIS, 0
+        EXIT SUB
+      END IF
+    END IF
+  NEXT
+
+END SUB ' loadIncludesAndBaseCode
+
+''''''''''''''''''''''''
+FUNCTION mouseClickedInBox (wStartX, wStartY, wSizeX, wSizeY)
+
+  tempRet = 0
+
+  IF mouse.Released1 THEN
+    IF mouseWithinBoxBounds(wStartX, wStartY, wSizeX, wSizeY) THEN
+      IF mouseDownWithinBoxBounds(wStartX, wStartY, wSizeX, wSizeY) THEN
+        tempRet = 1
+      END IF
+    END IF
+  END IF
+
+  mouseClickedInBox = tempRet
+
+END FUNCTION ' mouseClickedInBox
+
+''''''''''''''''''''''''
+FUNCTION mouseDownWithinBoxBounds (wStartX, wStartY, wSizeX, wSizeY)
+
+  toRet = 0
+
+  IF mouse.DownPosX >= wStartX AND mouse.DownPosX <= (wStartX + wSizeX - 1) AND mouse.DownPosY >= wStartY AND mouse.DownPosY <= (wStartY + wSizeY - 1) THEN
+    toRet = 1
+  END IF
+
+  mouseDownWithinBoxBounds = toRet
+
+END FUNCTION ' mouseDownWithinBoxBounds
+''''''''''''''''''''''''
+FUNCTION mouseDown2WithinBoxBounds (wStartX, wStartY, wSizeX, wSizeY)
+
+  toRet = 0
+
+  IF mouse.DownPosX2 >= wStartX AND mouse.DownPosX2 <= (wStartX + wSizeX - 1) AND mouse.DownPosY2 >= wStartY AND mouse.DownPosY2 <= (wStartY + wSizeY - 1) THEN
+    toRet = 1
+  END IF
+
+  mouseDown2WithinBoxBounds = toRet
+
+END FUNCTION ' mouseDown2WithinBoxBounds
+
+''''''''''''''''''''''''
+SUB mouseReadInput
+
+  mouse.Released1 = 0
+  mouse.Released2 = 0
+  mouse.Clicked1 = 0
+  mouse.Clicked2 = 0
+  mouse.Wheel = 0
+
+  DO WHILE _MOUSEINPUT
+
+    rawMouseX = _MOUSEX
+    rawMouseY = _MOUSEY
+
+    ' Downscale the physical screen mouse inputs directly into the 640x360 logic layout
+    mouse.PosX = (rawMouseX * SCREENSIZEX) \ physicalScreenX
+    mouse.PosY = (rawMouseY * SCREENSIZEY) \ physicalScreenY
+
+    IF mouse.PosX < 0 THEN mouse.PosX = 0
+    IF mouse.PosY < 0 THEN mouse.PosY = 0
+    IF mouse.PosX > SCREENSIZEX - 1 THEN mouse.PosX = SCREENSIZEX - 1
+    IF mouse.PosY > SCREENSIZEY - 1 THEN mouse.PosY = SCREENSIZEY - 1
+
+    mouse.Wheel = mouse.Wheel + _MOUSEWHEEL
+
+    pollMouse1Button = _MOUSEBUTTON(1)
+    IF pollMouse1Button <> mouse.Button1Down THEN
+      IF pollMouse1Button THEN
+        mouse.Clicked1 = 1
+        mouse.DownPosX = mouse.PosX
+        mouse.DownPosY = mouse.PosY
+      ELSE
+        mouse.Released1 = 1
+      END IF
+      mouse.Button1Down = pollMouse1Button
+    END IF
+
+    pollMouse2Button = _MOUSEBUTTON(2)
+    IF pollMouse2Button <> mouse.Button2Down THEN
+      IF pollMouse2Button THEN
+        mouse.Clicked2 = 1
+        mouse.DownPosX2 = mouse.PosX
+        mouse.DownPosY2 = mouse.PosY
+      ELSE
+        mouse.Released2 = 1
+      END IF
+      mouse.Button2Down = pollMouse2Button
+      EXIT SUB
+    END IF
+
+  LOOP
+
+END SUB ' mouseReadInput
+
+''''''''''''''''''''''''
+FUNCTION mouseWithinBoxBounds (wStartX, wStartY, wSizeX, wSizeY)
+
+  ' We use a slightly more forgiving check to handle edge-of-screen jitter
+  ' wSizeX and wSizeY are the dimensions, so the right edge is wStartX + wSizeX - 1
+
+  toRet = 0
+
+  ' Use <= to ensure the final pixel is included
+  ' We also add a small safety margin if the click is at the absolute screen edge
+  IF mouse.PosX >= wStartX AND mouse.PosX <= (wStartX + wSizeX - 1) AND mouse.PosY >= wStartY AND mouse.PosY <= (wStartY + wSizeY - 1) THEN
+    toRet = 1
+  END IF
+
+  mouseWithinBoxBounds = toRet
+
+END FUNCTION ' mouseWithinBoxBounds
 
 ''''''''''''''''''''''''
 SUB modalFileMenuNew
@@ -1988,6 +3314,117 @@ SUB modalViewSubs
 END SUB ' modalViewSubs
 
 ''''''''''''''''''''''''
+SUB overlayScaledTransparent (rsSourceImage, rsTargetImage, rsTransparentClr)
+
+  DIM sourceImage AS LONG
+  DIM targetImage AS LONG
+  DIM transparentClr AS LONG
+  DIM sourceWidth AS LONG
+  DIM sourceHeight AS LONG
+  DIM targetWidth AS LONG
+  DIM targetHeight AS LONG
+  DIM minX AS LONG
+  DIM minY AS LONG
+  DIM maxX AS LONG
+  DIM maxY AS LONG
+  DIM targetX1 AS LONG
+  DIM targetY1 AS LONG
+  DIM targetX2 AS LONG
+  DIM targetY2 AS LONG
+  DIM sampleX AS LONG
+  DIM sampleY AS LONG
+  DIM pixelClr AS LONG
+  DIM foundPixel AS LONG
+
+  sourceImage = rsSourceImage
+  targetImage = rsTargetImage
+  transparentClr = rsTransparentClr
+
+  sourceWidth = _WIDTH(sourceImage)
+  sourceHeight = _HEIGHT(sourceImage)
+  targetWidth = _WIDTH(targetImage)
+  targetHeight = _HEIGHT(targetImage)
+
+  foundPixel = 0
+
+  _SOURCE sourceImage
+
+  FOR iy = 0 TO sourceHeight - 1
+    FOR ix = 0 TO sourceWidth - 1
+
+      pixelClr = POINT(ix, iy)
+
+      IF pixelClr <> transparentClr THEN
+
+        IF foundPixel = 0 THEN
+
+          minX = ix
+          minY = iy
+          maxX = ix
+          maxY = iy
+          foundPixel = 1
+
+        ELSE
+
+          IF ix < minX THEN minX = ix
+          IF iy < minY THEN minY = iy
+          IF ix > maxX THEN maxX = ix
+          IF iy > maxY THEN maxY = iy
+
+        END IF
+
+      END IF
+
+    NEXT
+  NEXT
+
+  IF foundPixel = 0 THEN
+    _SOURCE 0
+    EXIT SUB
+  END IF
+
+  targetX1 = (minX * targetWidth) \ sourceWidth
+  targetY1 = (minY * targetHeight) \ sourceHeight
+
+  targetX2 = (((maxX + 1) * targetWidth) \ sourceWidth) - 1
+  targetY2 = (((maxY + 1) * targetHeight) \ sourceHeight) - 1
+
+  IF targetX1 < 0 THEN targetX1 = 0
+  IF targetY1 < 0 THEN targetY1 = 0
+  IF targetX2 >= targetWidth THEN targetX2 = targetWidth - 1
+  IF targetY2 >= targetHeight THEN targetY2 = targetHeight - 1
+
+  _DEST targetImage
+  _SOURCE sourceImage
+
+  FOR iy = targetY1 TO targetY2
+
+    sampleY = (iy * sourceHeight) \ targetHeight
+
+    IF sampleY < minY THEN sampleY = minY
+    IF sampleY > maxY THEN sampleY = maxY
+
+    FOR ix = targetX1 TO targetX2
+
+      sampleX = (ix * sourceWidth) \ targetWidth
+
+      IF sampleX < minX THEN sampleX = minX
+      IF sampleX > maxX THEN sampleX = maxX
+
+      pixelClr = POINT(sampleX, sampleY)
+
+      IF pixelClr <> transparentClr THEN
+        PSET (ix, iy), pixelClr
+      END IF
+
+    NEXT
+  NEXT
+
+  _SOURCE 0
+
+END SUB ' overlayScaledTransparent
+
+''''''''''''''''''''''''
 SUB pasteClipboardText
 
   IF editor.IsSelecting = 1 THEN
@@ -2142,6 +3579,66 @@ SUB PrintTextLineWithBanners (text$, wClr, whereY)
   PrintStr boxStartX + paddingPixels, boxStartY + paddingPixels, text$, wClr, 0, 0
 
 END SUB ' PrintTextLineWithBanners
+
+''''''''''''''''''''''''
+FUNCTION processDropdownMenu (wPosX, wPosY, wItemCount, passItems$())
+
+  returnExtraPrepare
+
+  DIM itemH AS LONG
+  itemH = 14
+
+  maxWidth = 0
+  FOR ii = 0 TO wItemCount - 1
+    wLen = LEN(passItems$(ii)) * 8
+    IF LEFT$(passItems$(ii), 1) = "~" THEN wLen = wLen - 8
+    IF wLen > maxWidth THEN maxWidth = wLen
+  NEXT
+  boxW = maxWidth + 16
+  boxH = (wItemCount * itemH) + 4
+
+  drawBorderBox wPosX, wPosY, boxW, boxH, 15, editor.windowBarClr
+
+  itemSelected = 0
+  clickedItem = 0
+
+  FOR ii = 0 TO wItemCount - 1
+    itemY = wPosY + 2 + (ii * itemH)
+    dStr$ = passItems$(ii)
+    isDisabled = 0
+    IF LEFT$(dStr$, 1) = "~" THEN
+      isDisabled = 1
+      dStr$ = MID$(dStr$, 2)
+    END IF
+
+    IF isDisabled = 0 THEN
+      IF mouseWithinBoxBounds(wPosX + 2, itemY, boxW - 4, itemH) THEN
+        drawClearBox wPosX + 2, itemY, boxW - 4, itemH, 9
+        IF mouseClickedInBox(wPosX + 2, itemY, boxW - 4, itemH) THEN
+          clickedItem = ii
+          itemSelected = 1
+        END IF
+      END IF
+      PrintStr wPosX + 8, itemY + 3, dStr$, 15, 0, 1
+    ELSE
+      PrintStr wPosX + 8, itemY + 3, dStr$, sysColor.gray, 0, 1
+    END IF
+  NEXT
+
+  IF mouseClickedInBox(wPosX, wPosY, boxW, boxH) THEN
+    editor.MenuClicked = 1
+  END IF
+
+  IF itemSelected = 1 THEN
+    return2 clickedItem
+    processDropdownMenu = 1
+    EXIT FUNCTION
+  END IF
+
+  return2 0
+  processDropdownMenu = 0
+
+END FUNCTION ' processDropdownMenu
 
 ''''''''''''''''''''''''
 SUB processInput
@@ -2617,6 +4114,886 @@ SUB processInput
   END IF
 
 END SUB ' processInput
+''''''''''''''''''''''''
+''''''''''''''''''''''''
+SUB processVScrollbar (wScrollID AS LONG, wPosX AS LONG, wPosY AS LONG, wSizeX AS LONG, wSizeY AS LONG, wTotalItems AS LONG, wMaxVis AS LONG, wIs1Based AS LONG)
+
+  DIM passCurScroll AS LONG
+  DIM passDragActive AS LONG
+  DIM passDragOffset AS LONG
+
+  SELECT CASE wScrollID
+
+    CASE SCROLL_MAIN
+      passCurScroll = editor.ScrollY
+      passDragActive = editor.ScrollDragActive
+      passDragOffset = editor.ScrollDragOffsetY
+    CASE SCROLL_STATUS
+      passCurScroll = editor.StatusScrollY
+      passDragActive = editor.StatusScrollDragActive
+      passDragOffset = editor.StatusScrollDragOffsetY
+    CASE SCROLL_FUNC
+      passCurScroll = editor.FuncScroll.ScrollY
+      passDragActive = editor.FuncScroll.DragActive
+      passDragOffset = editor.FuncScroll.DragOffset
+    CASE SCROLL_MODAL
+      passCurScroll = editor.ModalScroll.ScrollY
+      passDragActive = editor.ModalScroll.DragActive
+      passDragOffset = editor.ModalScroll.DragOffset
+
+  END SELECT ' wScrollID
+
+  drawBorderBox wPosX, wPosY, wSizeX, wSizeY, 15, 0
+
+  drawBorderBox wPosX, wPosY, wSizeX, 11, 15, 0
+  drawBorderBox wPosX, wPosY + wSizeY - 11, wSizeX, 11, 15, 0
+
+  charX = wPosX + (wSizeX \ 2) - 4
+  PrintChr charX, wPosY + 2, CHR$(24), 15, 0, 1
+  PrintChr charX, wPosY + wSizeY - 9, CHR$(25), 15, 0, 1
+
+  minScroll = 0
+  IF wIs1Based = 1 THEN minScroll = 1
+
+  scrollRange = wTotalItems - wMaxVis
+  IF scrollRange < 0 THEN scrollRange = 0
+
+  maxScroll = scrollRange + minScroll
+
+  thumbMaxH = wSizeY - 22
+  IF wTotalItems > wMaxVis THEN
+    thumbSize = (wMaxVis * thumbMaxH) \ wTotalItems
+    IF thumbSize < 10 THEN thumbSize = 10
+    IF scrollRange > 0 THEN
+      thumbY = wPosY + 11 + (((passCurScroll - minScroll) * (thumbMaxH - thumbSize)) \ scrollRange)
+    ELSE
+      thumbY = wPosY + 11
+    END IF
+    drawBorderBox wPosX + 1, thumbY, wSizeX - 2, thumbSize, 2, 15
+  ELSE
+    thumbSize = thumbMaxH
+    thumbY = wPosY + 11
+    drawBorderBox wPosX + 1, thumbY, wSizeX - 2, thumbSize, 2, 15
+  END IF
+
+  ' Mouse Logic
+  IF mouse.Clicked1 THEN
+    IF wTotalItems > wMaxVis THEN
+      IF mouseWithinBoxBounds(wPosX, thumbY, wSizeX, thumbSize) THEN
+        passDragActive = 1
+        passDragOffset = mouse.PosY - thumbY
+      ELSE
+        IF mouseWithinBoxBounds(wPosX, wPosY + 11, wSizeX, thumbMaxH) THEN
+          IF mouse.PosY < thumbY THEN
+            passCurScroll = passCurScroll - wMaxVis
+            IF passCurScroll < minScroll THEN passCurScroll = minScroll
+          ELSE
+            passCurScroll = passCurScroll + wMaxVis
+            IF passCurScroll > maxScroll THEN passCurScroll = maxScroll
+          END IF
+        END IF
+      END IF
+    END IF
+
+    IF mouseWithinBoxBounds(wPosX, wPosY, wSizeX, 11) THEN
+      passCurScroll = passCurScroll - 1
+      IF passCurScroll < minScroll THEN passCurScroll = minScroll
+    END IF
+
+    IF mouseWithinBoxBounds(wPosX, wPosY + wSizeY - 11, wSizeX, 11) THEN
+      passCurScroll = passCurScroll + 1
+      IF passCurScroll > maxScroll THEN passCurScroll = maxScroll
+    END IF
+  END IF
+
+  IF mouse.Button1Down AND passDragActive = 1 THEN
+    IF wTotalItems > wMaxVis THEN
+      newThumbY = mouse.PosY - passDragOffset
+      trackSize = thumbMaxH - thumbSize
+      IF trackSize > 0 THEN
+        newScroll = minScroll + (((newThumbY - (wPosY + 11)) * scrollRange) \ trackSize)
+        IF newScroll < minScroll THEN newScroll = minScroll
+        IF newScroll > maxScroll THEN newScroll = maxScroll
+        passCurScroll = newScroll
+      END IF
+    END IF
+  END IF
+
+  IF mouse.Released1 THEN
+    passDragActive = 0
+  END IF
+
+  SELECT CASE wScrollID
+
+    CASE SCROLL_MAIN
+      editor.ScrollY = passCurScroll
+      editor.ScrollDragActive = passDragActive
+      editor.ScrollDragOffsetY = passDragOffset
+    CASE SCROLL_STATUS
+      editor.StatusScrollY = passCurScroll
+      editor.StatusScrollDragActive = passDragActive
+      editor.StatusScrollDragOffsetY = passDragOffset
+    CASE SCROLL_FUNC
+      editor.FuncScroll.ScrollY = passCurScroll
+      editor.FuncScroll.DragActive = passDragActive
+      editor.FuncScroll.DragOffset = passDragOffset
+    CASE SCROLL_MODAL
+      editor.ModalScroll.ScrollY = passCurScroll
+      editor.ModalScroll.DragActive = passDragActive
+      editor.ModalScroll.DragOffset = passDragOffset
+
+  END SELECT ' wScrollID
+
+END SUB ' processVScrollbar
+
+''''''''''''''''''''''''
+SUB pushStatusMsg (wStr$, wLineNum AS LONG, wGroupID AS _UNSIGNED LONG)
+
+  IF statusMsgCount < MAX_STATUS_MSGS THEN
+    statusMsg(statusMsgCount).Text = wStr$
+    statusMsg(statusMsgCount).CodeLine = wLineNum
+    statusMsg(statusMsgCount).GroupID = wGroupID
+    statusMsgCount = statusMsgCount + 1
+  ELSE
+    FOR ii = 1 TO 998
+      statusMsg(ii).Text = statusMsg(ii + 1).Text
+      statusMsg(ii).CodeLine = statusMsg(ii + 1).CodeLine
+      statusMsg(ii).GroupID = statusMsg(ii + 1).GroupID
+    NEXT
+    statusMsg(999).Text = wStr$
+    statusMsg(999).CodeLine = wLineNum
+    statusMsg(999).GroupID = wGroupID
+  END IF
+
+  statusBoxH = 38
+  maxLines = (statusBoxH - 5) \ 11
+  IF (statusMsgCount - 1) > maxLines THEN
+    editor.StatusScrollY = statusMsgCount - maxLines
+  ELSE
+    editor.StatusScrollY = 1
+  END IF
+
+END SUB ' pushStatusMsg
+
+''''''''''''''''''''''''
+SUB redrawAll
+
+  CLS
+  COLOR 15
+
+  editor.MenuClicked = 0
+
+  drawEditorPMI
+  drawStatusPMI
+  drawButtonsPMI
+  drawTopMenuAndScrollPMI
+  drawFuncListPMI
+  drawCornerPMI
+
+  ' Add the Show Desktop / Minimize All button to the bottom right corner
+  minAllW = 12
+  minAllH = 12
+  minAllX = SCREENSIZEX - 12
+  minAllY = SCREENSIZEY - 12
+
+  drawBorderBox minAllX, minAllY, minAllW, minAllH, 15, editor.windowBarClr
+
+  ' Hover effect
+  IF mouseWithinBoxBounds(minAllX, minAllY, minAllW, minAllH) THEN
+    drawClearBox minAllX + 1, minAllY + 1, minAllW - 2, minAllH - 2, 9
+  END IF
+
+  ' Use the letter v to mimic a down arrow
+  PrintStr minAllX + 3, minAllY + 2, "v", 15, 0, 1
+
+  ' Handle click
+  IF mouseClickedInBox(minAllX, minAllY, minAllW, minAllH) THEN
+    editor.MenuClicked = 1
+    SHELL _HIDE "explorer.exe shell:::{3080F90D-D7AD-11D9-BD98-0000947B0257}"
+  END IF
+
+  IF mouse.Released1 THEN
+    IF editor.MenuClicked = 0 THEN
+      editor.TopMenuFocus = 0
+    END IF
+  END IF
+
+  ' Print text cursor and mouse position information at the lower right
+  showCursorData SCREENSIZEX - 72, SCREENSIZEY - 48
+
+END SUB ' redrawAll
+
+''''''''''''''''''''''''
+SUB refineCode (targetLine AS LONG, isCompileClick AS LONG)
+
+  DIM refName$(MAX_SYMBOLS)
+  DIM refScope(MAX_SYMBOLS) AS LONG
+  DIM activeScope AS LONG
+
+  ' String Tracking State for Enforcing/Stripping '$' Suffix in Standard Mode
+  DIM strDeclName$(MAX_STRING_DECLS)
+  DIM strDeclScope(MAX_STRING_DECLS) AS LONG
+  DIM strDeclType(MAX_STRING_DECLS) AS LONG ' 0 = Suspended, 1 = Requires $ (Dynamic/Fixed with $), 2 = Requires NO $ (Fixed without $)
+
+  DIM isStrFound AS LONG
+  DIM foundStrIdx AS LONG
+  DIM isVarFound AS LONG
+  DIM foundVarIdx AS LONG
+  DIM hasPendingStr AS LONG
+
+  DIM isDirStart AS LONG
+  DIM newRawString AS STRING
+  DIM newLen AS LONG
+  DIM tempPart$
+  DIM tempPartLen AS LONG
+
+  DIM builtLine$
+  DIM trimmedLine$
+  DIM uTrimmed$
+  DIM leadingSpaces AS LONG
+  DIM sIdx AS LONG
+
+  newRawString = SPACE$(16384)
+
+  strDeclCount = 0
+  refCount = 0
+
+  IF targetLine = 0 THEN
+    startLine = 1
+    endLine = editor.LastLine
+    uiSubCount = 0
+    activeScope = 0
+    scopeCounter = 0
+    scanGlobalDirectives 0
+  ELSE
+    startLine = targetLine
+    endLine = targetLine
+
+    ' Fast-scan upward to establish the correct scope context for the dirty line
+    activeScope = 0
+    scopeCounter = 0
+    FOR iy = 1 TO startLine - 1
+      uTemp$ = UCASE$(LTRIM$(RTRIM$(editorText$(iy))))
+      IF LEFT$(uTemp$, 4) = "SUB " OR LEFT$(uTemp$, 9) = "FUNCTION " THEN
+        scopeCounter = scopeCounter + 1
+        activeScope = scopeCounter
+      END IF
+      IF LEFT$(uTemp$, 7) = "END SUB" OR LEFT$(uTemp$, 12) = "END FUNCTION" THEN
+        activeScope = 0
+      END IF
+    NEXT
+  END IF
+
+  IF compileEmeraldMode = 1 THEN
+    sysColor.focusBorder = 10
+  ELSE
+    sysColor.focusBorder = 9
+  END IF
+
+
+  FOR iy = startLine TO endLine
+    checkEmergencyClose
+    IF compileError = 1 THEN EXIT SUB
+
+    curLine$ = editorText$(iy)
+    tempLine$ = LTRIM$(RTRIM$(curLine$))
+
+    uTemp$ = UCASE$(tempLine$)
+    IF LEFT$(uTemp$, 4) = "SUB " OR LEFT$(uTemp$, 9) = "FUNCTION " THEN
+      IF targetLine = 0 THEN
+        scopeCounter = scopeCounter + 1
+        activeScope = scopeCounter
+      ELSE
+        ' Make sure activeScope registers if the user specifically edited the SUB definition line itself
+        scopeCounter = scopeCounter + 1
+        activeScope = scopeCounter
+      END IF
+    END IF
+
+    IF LEN(tempLine$) > 0 THEN
+      newLen = 0
+      ix = 1
+      lineLen = LEN(curLine$)
+      hasNonSpace = 0
+      lastKwVal = 0
+
+      ' State Machine per line for detecting AS DSTRING and AS STRING *
+      asMode = 0
+      lastVarBase$ = ""
+      lastVarSuffix$ = ""
+      pendingStrIdx = 0
+      hasPendingStr = 0
+      parenDepth = 0
+
+      isValidLine = 0
+      IF INSTR(curLine$, "=") > 0 THEN isValidLine = 1
+      firstIdent$ = ""
+
+      FOR i_scan = 1 TO lineLen
+        cAs = ASC(curLine$, i_scan)
+        isDirScan = 0
+
+        IF cAs = 35 OR cAs = 36 THEN ' # or $
+          IF i_scan < lineLen THEN
+            nAs = ASC(curLine$, i_scan + 1)
+            IF (nAs >= 65 AND nAs <= 90) OR (nAs >= 97 AND nAs <= 122) THEN isDirScan = 1
+          END IF
+        END IF
+
+        IF (cAs >= 65 AND cAs <= 90) OR (cAs >= 97 AND cAs <= 122) OR cAs = 95 OR isDirScan = 1 THEN
+          tStart = i_scan
+          FOR j_scan = i_scan TO lineLen
+            c2As = ASC(curLine$, j_scan)
+            IF (c2As >= 65 AND c2As <= 90) OR (c2As >= 97 AND c2As <= 122) OR (c2As >= 48 AND c2As <= 57) OR c2As = 95 OR (j_scan = i_scan AND (c2As = 35 OR c2As = 36)) THEN
+              ' Continue scanning
+            ELSE
+              EXIT FOR
+            END IF
+          NEXT
+          firstIdent$ = MID$(curLine$, tStart, j_scan - tStart)
+          EXIT FOR
+        END IF
+      NEXT
+
+      IF firstIdent$ <> "" THEN
+        uFirst$ = UCASE$(firstIdent$)
+
+        uIdentSearch$ = uFirst$
+        IF uIdentSearch$ = "_BYTE" THEN uIdentSearch$ = "BYTE"
+        IF uIdentSearch$ = "_INTEGER" THEN uIdentSearch$ = "INTEGER"
+        IF uIdentSearch$ = "_LONG" THEN uIdentSearch$ = "LONG"
+        IF uIdentSearch$ = "_INTEGER64" THEN uIdentSearch$ = "INTEGER64"
+        IF uIdentSearch$ = "_SINGLE" THEN uIdentSearch$ = "SINGLE"
+        IF uIdentSearch$ = "_DOUBLE" THEN uIdentSearch$ = "DOUBLE"
+        IF uIdentSearch$ = "_STRING" THEN uIdentSearch$ = "STRING"
+        IF uIdentSearch$ = "_DSTRING" THEN uIdentSearch$ = "DSTRING"
+        IF uIdentSearch$ = "_UNSIGNED" THEN uIdentSearch$ = "UNSIGNED"
+        IF uIdentSearch$ = "_ANY" THEN uIdentSearch$ = "ANY"
+
+        ff = findKeywordIndex(uIdentSearch$)
+        IF ff = 1 THEN isValidLine = 1
+      END IF
+
+      DO WHILE ix <= lineLen
+        cAs = ASC(curLine$, ix)
+
+        IF cAs = 32 OR cAs = 9 THEN
+          IF hasNonSpace = 0 THEN
+            IF newLen + 1 > LEN(newRawString) THEN newRawString = newRawString + SPACE$(16384)
+            newLen = newLen + 1
+            ASC(newRawString, newLen) = cAs
+            ix = ix + 1
+          ELSE
+            IF newLen + 1 > LEN(newRawString) THEN newRawString = newRawString + SPACE$(16384)
+            newLen = newLen + 1
+            ASC(newRawString, newLen) = 32
+            ix = ix + 1
+            DO WHILE ix <= lineLen
+              c2As = ASC(curLine$, ix)
+              IF c2As = 32 OR c2As = 9 THEN
+                ix = ix + 1
+              ELSE
+                EXIT DO
+              END IF
+            LOOP
+          END IF
+        ELSE
+          hasNonSpace = 1
+
+          IF cAs = 39 THEN ' '
+            tempPart$ = MID$(curLine$, ix)
+            tempPartLen = LEN(tempPart$)
+            IF tempPartLen > 0 THEN
+              IF newLen + tempPartLen > LEN(newRawString) THEN newRawString = newRawString + SPACE$(16384)
+              MID$(newRawString, newLen + 1, tempPartLen) = tempPart$
+              newLen = newLen + tempPartLen
+            END IF
+            EXIT DO
+          END IF
+
+          IF cAs = 34 THEN ' "
+            tStart = ix
+            ix = ix + 1
+            DO WHILE ix <= lineLen
+              c2As = ASC(curLine$, ix)
+              ix = ix + 1
+              IF c2As = 34 THEN EXIT DO
+            LOOP
+            tempPart$ = MID$(curLine$, tStart, ix - tStart)
+            tempPartLen = LEN(tempPart$)
+            IF tempPartLen > 0 THEN
+              IF newLen + tempPartLen > LEN(newRawString) THEN newRawString = newRawString + SPACE$(16384)
+              MID$(newRawString, newLen + 1, tempPartLen) = tempPart$
+              newLen = newLen + tempPartLen
+            END IF
+            lastKwVal = 0
+          ELSE
+            isDirStart = 0
+            IF cAs = 35 OR cAs = 36 THEN ' # or $
+              IF ix < lineLen THEN
+                nAs = ASC(curLine$, ix + 1)
+                IF (nAs >= 65 AND nAs <= 90) OR (nAs >= 97 AND nAs <= 122) THEN isDirStart = 1
+              END IF
+            END IF
+
+            IF (cAs >= 65 AND cAs <= 90) OR (cAs >= 97 AND cAs <= 122) OR cAs = 95 OR isDirStart = 1 THEN
+              tStart = ix
+              DO WHILE ix <= lineLen
+                c2As = ASC(curLine$, ix)
+                IF (c2As >= 65 AND c2As <= 90) OR (c2As >= 97 AND c2As <= 122) OR (c2As >= 48 AND c2As <= 57) OR c2As = 95 OR (ix = tStart AND (c2As = 35 OR c2As = 36)) THEN
+                  ix = ix + 1
+                ELSE
+                  EXIT DO
+                END IF
+              LOOP
+
+              ident$ = MID$(curLine$, tStart, ix - tStart)
+              suffixCh$ = ""
+
+              IF ix <= lineLen THEN
+                c2As = ASC(curLine$, ix)
+                IF c2As = 36 OR c2As = 35 OR c2As = 33 OR c2As = 38 OR c2As = 37 THEN
+                  suffixCh$ = CHR$(c2As)
+                  ident$ = ident$ + suffixCh$
+                  ix = ix + 1
+                END IF
+              END IF
+
+              ' Lookahead specifically for AS DSTRING to aggressively append the suffix
+              IF compileEmeraldMode = 0 AND suffixCh$ = "" AND parenDepth = 0 THEN
+                lookIx = ix
+                lookPDepth = 0
+                DO WHILE lookIx <= lineLen
+                  lAs = ASC(curLine$, lookIx)
+                  IF lAs = 40 THEN lookPDepth = lookPDepth + 1
+                  IF lAs = 41 THEN lookPDepth = lookPDepth - 1
+                  IF lookPDepth = 0 AND lAs <> 41 AND lAs <> 40 AND lAs <> 32 AND lAs <> 9 THEN EXIT DO
+                  lookIx = lookIx + 1
+                LOOP
+                IF UCASE$(MID$(curLine$, lookIx, 2)) = "AS" THEN
+                  lookIx = lookIx + 2
+                  IF lookIx <= lineLen THEN
+                    lAs = ASC(curLine$, lookIx)
+                    IF lAs = 32 OR lAs = 9 THEN
+                      DO WHILE lookIx <= lineLen
+                        lAs = ASC(curLine$, lookIx)
+                        IF lAs = 32 OR lAs = 9 THEN lookIx = lookIx + 1 ELSE EXIT DO
+                      LOOP
+                      IF UCASE$(MID$(curLine$, lookIx, 7)) = "DSTRING" THEN
+                        IF lookIx + 7 <= lineLen THEN
+                          lAsNext = ASC(curLine$, lookIx + 7)
+                        ELSE
+                          lAsNext = 0
+                        END IF
+                        IF NOT ((lAsNext >= 65 AND lAsNext <= 90) OR (lAsNext >= 97 AND lAsNext <= 122) OR (lAsNext >= 48 AND lAsNext <= 57) OR lAsNext = 95) THEN
+                          ident$ = ident$ + "$"
+                          suffixCh$ = "$"
+                        END IF
+                      END IF
+                    END IF
+                  END IF
+                END IF
+              END IF
+
+              uIdent$ = UCASE$(ident$)
+
+              uIdentSearch$ = uIdent$
+              IF uIdentSearch$ = "_BYTE" THEN uIdentSearch$ = "BYTE"
+              IF uIdentSearch$ = "_INTEGER" THEN uIdentSearch$ = "INTEGER"
+              IF uIdentSearch$ = "_LONG" THEN uIdentSearch$ = "LONG"
+              IF uIdentSearch$ = "_INTEGER64" THEN uIdentSearch$ = "INTEGER64"
+              IF uIdentSearch$ = "_SINGLE" THEN uIdentSearch$ = "SINGLE"
+              IF uIdentSearch$ = "_DOUBLE" THEN uIdentSearch$ = "DOUBLE"
+              IF uIdentSearch$ = "_STRING" THEN uIdentSearch$ = "STRING"
+              IF uIdentSearch$ = "_DSTRING" THEN uIdentSearch$ = "DSTRING"
+              IF uIdentSearch$ = "_UNSIGNED" THEN uIdentSearch$ = "UNSIGNED"
+              IF uIdentSearch$ = "_ANY" THEN uIdentSearch$ = "ANY"
+
+              ff = findKeywordIndex(uIdentSearch$)
+              IF ff = 1 THEN
+                isKey = 1
+                kwVal = returnedData2
+              ELSE
+                isKey = 0
+                kwVal = 0
+              END IF
+
+              IF isKey = 1 THEN
+                tempPartLen = LEN(uIdent$)
+                IF tempPartLen > 0 THEN
+                  IF newLen + tempPartLen > LEN(newRawString) THEN newRawString = newRawString + SPACE$(16384)
+                  MID$(newRawString, newLen + 1, tempPartLen) = uIdent$
+                  newLen = newLen + tempPartLen
+                END IF
+                lastKwVal = kwVal
+
+                ' AS STRING / AS DSTRING detection state machine
+                SELECT CASE kwVal
+
+                  CASE TOK_AS
+                    asMode = 1
+                    IF lastVarBase$ <> "" THEN
+                      isStrFound = 0
+                      foundStrIdx = 0
+                      FOR iStr = 0 TO strDeclCount - 1
+                        IF strDeclName$(iStr) = lastVarBase$ AND strDeclScope(iStr) = activeScope THEN
+                          foundStrIdx = iStr
+                          isStrFound = 1
+                          EXIT FOR
+                        END IF
+                      NEXT
+                      IF isStrFound = 0 AND strDeclCount < MAX_STRING_DECLS THEN
+                        foundStrIdx = strDeclCount
+                        strDeclName$(foundStrIdx) = lastVarBase$
+                        strDeclScope(foundStrIdx) = activeScope
+                        strDeclCount = strDeclCount + 1
+                        isStrFound = 1
+                      END IF
+                      IF isStrFound = 1 THEN
+                        strDeclType(foundStrIdx) = 0 ' Suspend initially
+                        pendingStrIdx = foundStrIdx
+                        hasPendingStr = 1
+                      END IF
+                    END IF
+
+                  CASE TOK_DSTRING
+                    IF asMode = 1 THEN
+                      asMode = 0
+                      IF hasPendingStr = 1 THEN
+                        strDeclType(pendingStrIdx) = 1 ' DSTRING forces $
+                        hasPendingStr = 0
+                      END IF
+                    ELSE
+                      asMode = 0
+                      hasPendingStr = 0
+                    END IF
+
+                  CASE TOK_STRING
+                    IF asMode = 1 THEN
+                      IF compileStringStrict = 1 THEN
+                        asMode = 3 ' Waiting for *
+                      ELSE
+                        asMode = 5 ' Optional *
+                      END IF
+                    ELSE
+                      asMode = 0
+                      hasPendingStr = 0
+                    END IF
+
+                  CASE ELSE
+                    asMode = 0
+                    hasPendingStr = 0
+
+                END SELECT ' kwVal
+
+              ELSE
+                ' Is Variable / Label / Sub Call
+                IF lastKwVal = TOK_DEF THEN
+                  IF UCASE$(LEFT$(ident$, 2)) = "FN" THEN
+                    IF LEN(ident$) = 2 THEN
+                      ident$ = "FN"
+                    ELSE
+                      ident$ = "Fn" + MID$(ident$, 3)
+                    END IF
+                  END IF
+                END IF
+                lastKwVal = 0
+
+                SELECT CASE asMode
+
+                  CASE 4
+                    ' Valid identifier used as length (e.g. constant)
+                    asMode = 0
+                    IF hasPendingStr = 1 THEN
+                      IF lastVarSuffix$ = "$" THEN
+                        strDeclType(pendingStrIdx) = 1
+                      ELSE
+                        strDeclType(pendingStrIdx) = 2
+                      END IF
+                      hasPendingStr = 0
+                    END IF
+
+                  CASE 5
+                    ' We saw AS STRING, but no *, and now we hit a variable. It's a dynamic string
+                    asMode = 0
+                    IF hasPendingStr = 1 THEN
+                      IF lastVarSuffix$ = "$" THEN
+                        strDeclType(pendingStrIdx) = 1
+                      ELSE
+                        strDeclType(pendingStrIdx) = 2
+                      END IF
+                      hasPendingStr = 0
+                    END IF
+
+                  CASE ELSE
+                    asMode = 0
+                    hasPendingStr = 0
+
+                END SELECT ' asMode
+
+                baseName$ = UCASE$(ident$)
+                IF suffixCh$ <> "" THEN baseName$ = LEFT$(baseName$, LEN(baseName$) - 1)
+
+                ' Only track variables for string typing if they aren't enclosed in parentheses (e.g. array dimensions)
+                IF parenDepth = 0 THEN
+                  lastVarBase$ = baseName$
+                  lastVarSuffix$ = suffixCh$
+                END IF
+
+                ' If Emerald mode is active, we track the variable on its FIRST sighting.
+                ' Whatever the user typed the first time dictates the variable's suffix permanently.
+                IF compileEmeraldMode = 1 THEN
+                  isStrFound = 0
+                  foundStrIdx = 0
+                  FOR iStr = 0 TO strDeclCount - 1
+                    IF strDeclName$(iStr) = baseName$ AND (strDeclScope(iStr) = activeScope OR strDeclScope(iStr) = 0) THEN
+                      foundStrIdx = iStr
+                      isStrFound = 1
+                      EXIT FOR
+                    END IF
+                  NEXT
+
+                  IF isStrFound = 0 AND strDeclCount < MAX_STRING_DECLS THEN
+                    ' First sighting! Register it safely if within tracking bounds.
+                    foundStrIdx = strDeclCount
+                    strDeclName$(foundStrIdx) = baseName$
+                    strDeclScope(foundStrIdx) = activeScope
+                    IF suffixCh$ = "$" THEN
+                      strDeclType(foundStrIdx) = 1 ' Requires $
+                    ELSE
+                      strDeclType(foundStrIdx) = 2 ' Requires NO $
+                    END IF
+                    strDeclCount = strDeclCount + 1
+                    isStrFound = 1
+                  END IF
+
+                  ' Only apply string enforcement rules if the variable was explicitly located or registered
+                  IF isStrFound = 1 THEN
+                    strType = strDeclType(foundStrIdx)
+
+                    SELECT CASE strType
+                      CASE 1 ' Requires $
+                        IF suffixCh$ <> "$" THEN
+                          ident$ = ident$ + "$"
+                          suffixCh$ = "$"
+                        END IF
+                      CASE 2 ' Requires NO $
+                        IF suffixCh$ = "$" THEN
+                          ident$ = LEFT$(ident$, LEN(ident$) - 1)
+                          suffixCh$ = ""
+                        END IF
+                    END SELECT
+                  END IF
+                END IF
+
+                isVarFound = 0
+                foundVarIdx = 0
+                uIdent$ = UCASE$(ident$)
+
+                FOR ii = 0 TO refCount - 1
+                  IF UCASE$(refName$(ii)) = uIdent$ THEN
+                    IF refScope(ii) = activeScope THEN
+                      foundVarIdx = ii
+                      isVarFound = 1
+                      EXIT FOR
+                    END IF
+                  END IF
+                NEXT
+
+                IF isVarFound = 0 AND activeScope > 0 THEN
+                  FOR ii = 0 TO refCount - 1
+                    IF UCASE$(refName$(ii)) = uIdent$ THEN
+                      IF refScope(ii) = 0 THEN
+                        foundVarIdx = ii
+                        isVarFound = 1
+                        EXIT FOR
+                      END IF
+                    END IF
+                  NEXT
+                END IF
+
+                IF isValidLine = 1 THEN
+                  IF isVarFound = 0 THEN
+                    IF refCount < MAX_SYMBOLS THEN
+                      foundVarIdx = refCount
+                      refName$(foundVarIdx) = ident$
+                      refScope(foundVarIdx) = activeScope
+                      refCount = refCount + 1
+                      isVarFound = 1
+                    END IF
+                    tempPartLen = LEN(ident$)
+                    IF tempPartLen > 0 THEN
+                      IF newLen + tempPartLen > LEN(newRawString) THEN newRawString = newRawString + SPACE$(16384)
+                      MID$(newRawString, newLen + 1, tempPartLen) = ident$
+                      newLen = newLen + tempPartLen
+                    END IF
+                  ELSE
+                    tempPart$ = refName$(foundVarIdx)
+                    tempPartLen = LEN(tempPart$)
+                    IF tempPartLen > 0 THEN
+                      IF newLen + tempPartLen > LEN(newRawString) THEN newRawString = newRawString + SPACE$(16384)
+                      MID$(newRawString, newLen + 1, tempPartLen) = tempPart$
+                      newLen = newLen + tempPartLen
+                    END IF
+                  END IF
+                ELSE
+                  IF isVarFound = 0 THEN
+                    tempPartLen = LEN(ident$)
+                    IF tempPartLen > 0 THEN
+                      IF newLen + tempPartLen > LEN(newRawString) THEN newRawString = newRawString + SPACE$(16384)
+                      MID$(newRawString, newLen + 1, tempPartLen) = ident$
+                      newLen = newLen + tempPartLen
+                    END IF
+                  ELSE
+                    tempPart$ = refName$(foundVarIdx)
+                    tempPartLen = LEN(tempPart$)
+                    IF tempPartLen > 0 THEN
+                      IF newLen + tempPartLen > LEN(newRawString) THEN newRawString = newRawString + SPACE$(16384)
+                      MID$(newRawString, newLen + 1, tempPartLen) = tempPart$
+                      newLen = newLen + tempPartLen
+                    END IF
+                  END IF
+                END IF
+              END IF
+            ELSE
+              ' Symbol
+              IF newLen + 1 > LEN(newRawString) THEN newRawString = newRawString + SPACE$(16384)
+              newLen = newLen + 1
+              ASC(newRawString, newLen) = cAs
+
+              ix = ix + 1
+              lastKwVal = 0
+
+              IF cAs = 40 THEN parenDepth = parenDepth + 1
+              IF cAs = 41 THEN parenDepth = parenDepth - 1
+
+              IF cAs = 42 AND (asMode = 3 OR asMode = 5) THEN ' *
+                asMode = 4 ' Waiting for length
+              ELSE
+                IF cAs <> 32 AND cAs <> 9 THEN
+                  IF asMode = 4 THEN
+                    ' If we see a valid number, we successfully found our length
+                    IF cAs >= 48 AND cAs <= 57 THEN
+                      asMode = 0
+                      IF hasPendingStr = 1 THEN
+                        IF lastVarSuffix$ = "$" THEN
+                          strDeclType(pendingStrIdx) = 1
+                        ELSE
+                          strDeclType(pendingStrIdx) = 2
+                        END IF
+                        hasPendingStr = 0
+                      END IF
+                    ELSE
+                      ' Garbage found! Abort commit and leave the variable Suspended
+                      asMode = 0
+                      hasPendingStr = 0
+                    END IF
+                  ELSE
+                    IF asMode = 5 THEN
+                      ' Hit a non-space symbol right after AS STRING. Treat as dynamic.
+                      asMode = 0
+                      IF hasPendingStr = 1 THEN
+                        IF lastVarSuffix$ = "$" THEN
+                          strDeclType(pendingStrIdx) = 1
+                        ELSE
+                          strDeclType(pendingStrIdx) = 2
+                        END IF
+                        hasPendingStr = 0
+                      END IF
+                    ELSE
+                      asMode = 0
+                      hasPendingStr = 0
+                    END IF
+                  END IF
+                END IF
+              END IF
+            END IF
+          END IF
+        END IF
+      LOOP
+
+      builtLine$ = RTRIM$(LEFT$(newRawString, newLen))
+      trimmedLine$ = LTRIM$(builtLine$)
+      uTrimmed$ = UCASE$(trimmedLine$)
+
+      IF trimmedLine$ <> "" THEN
+        IF LEFT$(uTrimmed$, 4) = "SUB " OR LEFT$(uTrimmed$, 9) = "FUNCTION " THEN
+          editorText$(iy) = trimmedLine$
+        ELSE
+          IF LEFT$(uTrimmed$, 7) = "END SUB" OR LEFT$(uTrimmed$, 12) = "END FUNCTION" THEN
+            editorText$(iy) = trimmedLine$
+          ELSE
+            IF activeScope > 0 THEN
+              IF LEFT$(trimmedLine$, 1) = "'" THEN
+                editorText$(iy) = builtLine$
+              ELSE
+                leadingSpaces = 0
+                FOR sIdx = 1 TO LEN(builtLine$)
+                  IF MID$(builtLine$, sIdx, 1) = " " THEN
+                    leadingSpaces = leadingSpaces + 1
+                  ELSE
+                    EXIT FOR
+                  END IF
+                NEXT
+
+                IF leadingSpaces < editor.TabSize THEN
+                  IF editor.TabSize > 0 THEN
+                    editorText$(iy) = SPACE$(editor.TabSize) + trimmedLine$
+                  ELSE
+                    editorText$(iy) = trimmedLine$
+                  END IF
+                ELSE
+                  editorText$(iy) = builtLine$
+                END IF
+              END IF
+            ELSE
+              editorText$(iy) = builtLine$
+            END IF
+          END IF
+        END IF
+      ELSE
+        editorText$(iy) = ""
+      END IF
+
+      ' Only update global UI Sub list safely during a full sweep load to avoid visual glitches
+      IF targetLine = 0 THEN
+        testSub$ = LTRIM$(editorText$(iy))
+        IF LEFT$(testSub$, 4) = "SUB " OR LEFT$(testSub$, 9) = "FUNCTION " THEN
+          IF uiSubCount < MAX_UI_SUBS THEN
+            IF LEFT$(testSub$, 4) = "SUB " THEN
+              sName$ = LTRIM$(RTRIM$(MID$(testSub$, 5)))
+            ELSE
+              sName$ = LTRIM$(RTRIM$(MID$(testSub$, 10)))
+            END IF
+
+            cleanName$ = ""
+            FOR nameIdx = 1 TO LEN(sName$)
+              nameChar = ASC(sName$, nameIdx)
+              IF (nameChar >= 65 AND nameChar <= 90) OR (nameChar >= 97 AND nameChar <= 122) OR (nameChar >= 48 AND nameChar <= 57) OR nameChar = 95 OR nameChar = 36 OR nameChar = 35 OR nameChar = 33 OR nameChar = 37 OR nameChar = 38 THEN
+                cleanName$ = cleanName$ + CHR$(nameChar)
+              ELSE
+                EXIT FOR
+              END IF
+            NEXT
+            sName$ = cleanName$
+
+            uiSubName$(uiSubCount) = sName$
+            uiSubLine(uiSubCount) = iy
+            uiSubCount = uiSubCount + 1
+          END IF
+        END IF
+      END IF
+
+    ELSE
+      editorText$(iy) = ""
+    END IF
+
+    IF LEFT$(uTemp$, 7) = "END SUB" OR LEFT$(uTemp$, 12) = "END FUNCTION" THEN
+      activeScope = 0
+    END IF
+  NEXT
+
+END SUB ' refineCode
 
 ''''''''''''''''''''''''
 SUB showCursorData (baseX, baseY)
@@ -2791,3 +5168,566 @@ SUB ESCAPETEXT2 (wStr1$, wStr2$)
   SYSTEM
 
 END SUB ' ESCAPETEXT2
+
+''''''''''''''''''''''''
+
+''''''''''''''''''''''''
+FUNCTION extractQuotes$ (wStr$)
+
+  tempReturn$ = ""
+  firstQuote = INSTR(wStr$, CHR$(34))
+
+  IF firstQuote > 0 THEN
+    secondQuote = INSTR(firstQuote + 1, wStr$, CHR$(34))
+    IF secondQuote > 0 THEN
+      tempReturn$ = MID$(wStr$, firstQuote + 1, secondQuote - firstQuote - 1)
+    END IF
+  END IF
+
+  extractQuotes$ = tempReturn$
+
+END FUNCTION ' extractQuotes$
+
+''''''''''''''''''''''''
+SUB fileCodeImport (importFile$)
+
+  IF _FILEEXISTS(importFile$) = 0 THEN EXIT SUB
+
+  ffTmp = FREEFILE
+  OPEN importFile$ FOR BINARY AS #ffTmp
+  fileLen = LOF(ffTmp)
+  IF fileLen = 0 THEN
+    CLOSE #ffTmp
+    EXIT SUB
+  END IF
+
+  fullText$ = SPACE$(fileLen)
+  GET #ffTmp, , fullText$
+  CLOSE #ffTmp
+
+  curY = editor.LastLine + 1
+  IF curY > EDITOR_LINE_MAX THEN EXIT SUB
+
+  ' Enforce visual separation
+  IF curY > 1 THEN
+    IF LTRIM$(RTRIM$(editorText$(curY - 1))) <> "" THEN
+      editorText$(curY) = ""
+      curY = curY + 1
+    END IF
+  END IF
+
+  IF curY <= EDITOR_LINE_MAX THEN
+    editorText$(curY) = "'''' IMPORTED: FILE: " + importFile$
+    curY = curY + 1
+  END IF
+
+  IF curY <= EDITOR_LINE_MAX THEN
+    editorText$(curY) = ""
+    curY = curY + 1
+  END IF
+
+  startPos = 1
+
+  ' Slice the incoming file block natively to eliminate slow byte-by-byte loop processing
+  DO WHILE startPos <= fileLen
+    nextNl = INSTR(startPos, fullText$, CHR$(10))
+    IF nextNl > 0 THEN
+      chunkLen = nextNl - startPos
+      IF chunkLen > 0 THEN
+        IF ASC(fullText$, nextNl - 1) = 13 THEN chunkLen = chunkLen - 1
+        IF chunkLen > 0 AND curY <= EDITOR_LINE_MAX THEN
+          editorText$(curY) = MID$(fullText$, startPos, chunkLen)
+        END IF
+      END IF
+      curY = curY + 1
+      IF curY > EDITOR_LINE_MAX THEN EXIT DO
+      startPos = nextNl + 1
+    ELSE
+      chunkLen = fileLen - startPos + 1
+      IF chunkLen > 0 THEN
+        IF ASC(fullText$, fileLen) = 13 THEN chunkLen = chunkLen - 1
+        IF chunkLen > 0 AND curY <= EDITOR_LINE_MAX THEN
+          editorText$(curY) = MID$(fullText$, startPos, chunkLen)
+        END IF
+      END IF
+      curY = curY + 1
+      EXIT DO
+    END IF
+  LOOP
+
+  ' Sync the global tracking bounds safely to the new expanded size
+  editor.LastLine = curY - 1
+  IF editor.LastLine > EDITOR_LINE_MAX THEN editor.LastLine = EDITOR_LINE_MAX
+  IF editor.LastLine < 1 THEN editor.LastLine = 1
+
+END SUB ' fileCodeImport
+
+''''''''''''''''''''''''
+SUB fileCodeLoad
+
+  curExt$ = ".BAS"
+  IF editor.FileExtensionMode = FILE_EXT_TXT THEN curExt$ = ".TXT"
+  IF editor.FileExtensionMode = FILE_EXT_BLB THEN curExt$ = ".BLB"
+
+  fln$ = fileNameBase$ + curExt$
+
+  IF _FILEEXISTS(fln$) = 0 THEN EXIT SUB
+
+  OPEN fln$ FOR BINARY AS #1
+
+  fileLen = LOF(1)
+
+  IF fileLen = 0 THEN
+    CLOSE #1
+    KILL fln$
+    EXIT SUB
+  END IF
+
+  ' Pre-allocate buffer and read entire file at once to eliminate per-byte I/O latency
+  fullText$ = SPACE$(fileLen)
+  GET #1, , fullText$
+  CLOSE #1
+
+  ' Pre-clear arrays
+  FOR iy = 1 TO EDITOR_LINE_MAX
+    editorText$(iy) = ""
+  NEXT
+
+  curY = 1
+  startPos = 1
+
+  ' Slice the text into individual lines using the native INSTR delimiter scanner for extreme speed
+  DO WHILE startPos <= fileLen
+    nextNl = INSTR(startPos, fullText$, CHR$(10))
+    IF nextNl > 0 THEN
+      chunkLen = nextNl - startPos
+      IF chunkLen > 0 THEN
+        IF ASC(fullText$, nextNl - 1) = 13 THEN chunkLen = chunkLen - 1
+        IF chunkLen > 0 AND curY <= EDITOR_LINE_MAX THEN
+          editorText$(curY) = MID$(fullText$, startPos, chunkLen)
+        END IF
+      END IF
+      curY = curY + 1
+      IF curY > EDITOR_LINE_MAX THEN EXIT DO
+      startPos = nextNl + 1
+    ELSE
+      chunkLen = fileLen - startPos + 1
+      IF chunkLen > 0 THEN
+        IF ASC(fullText$, fileLen) = 13 THEN chunkLen = chunkLen - 1
+        IF chunkLen > 0 AND curY <= EDITOR_LINE_MAX THEN
+          editorText$(curY) = MID$(fullText$, startPos, chunkLen)
+        END IF
+      END IF
+      curY = curY + 1
+      EXIT DO
+    END IF
+  LOOP
+
+  editor.LastLine = curY - 1
+  IF editor.LastLine > EDITOR_LINE_MAX THEN editor.LastLine = EDITOR_LINE_MAX
+  IF editor.LastLine < 1 THEN editor.LastLine = 1
+
+  IF editor.CursorY > editor.LastLine THEN
+    editor.CursorY = editor.LastLine
+    editor.CursorX = 0
+  END IF
+
+  IF editor.ScrollY > editor.LastLine THEN
+    editor.ScrollY = editor.LastLine - 27
+    IF editor.ScrollY < 1 THEN editor.ScrollY = 1
+  END IF
+
+END SUB ' fileCodeLoad
+
+''''''''''''''''''''''''
+SUB fileCodeSave
+
+  curExt$ = ".BAS"
+  IF editor.FileExtensionMode = FILE_EXT_TXT THEN curExt$ = ".TXT"
+  IF editor.FileExtensionMode = FILE_EXT_BLB THEN curExt$ = ".BLB"
+
+  fln$ = fileNameBase$ + curExt$
+
+  ffTmp = FREEFILE
+
+  OPEN fln$ FOR BINARY AS #ffTmp
+  IF LOF(ffTmp) > 0 THEN
+    CLOSE #ffTmp
+    KILL fln$
+    OPEN fln$ FOR BINARY AS #ffTmp
+  END IF
+
+  lastLine = editor.LastLine
+  totalLen = 0
+
+  ' Calculate the exact buffer size required for the entire file
+  FOR iy = 1 TO lastLine
+    totalLen = totalLen + LEN(editorText$(iy))
+  NEXT
+
+  ' Add space for the newline characters between each line
+  IF lastLine > 1 THEN
+    totalLen = totalLen + (lastLine - 1)
+  END IF
+
+  IF totalLen > 0 THEN
+    ' Pre-allocate the memory block to prevent slow string concatenation
+    fullText$ = SPACE$(totalLen)
+    curPos = 1
+
+    FOR iy = 1 TO lastLine
+      lineStr$ = editorText$(iy)
+      lineLen = LEN(lineStr$)
+
+      IF lineLen > 0 THEN
+        ' Use direct memory injection for maximum speed
+        MID$(fullText$, curPos, lineLen) = lineStr$
+        curPos = curPos + lineLen
+      END IF
+
+      ' Append the newline separator seamlessly
+      IF iy < lastLine THEN
+        ASC(fullText$, curPos) = 10
+        curPos = curPos + 1
+      END IF
+    NEXT
+
+    ' Blast the entire buffer directly to the disk in one native operation
+    PUT #ffTmp, , fullText$
+  END IF
+
+  CLOSE #ffTmp
+
+END SUB ' fileCodeSave
+
+''''''''''''''''''''''''
+SUB fileSaveBinary
+
+  DIM tryCount AS LONG
+  DIM suffixStr$
+  DIM testBase$
+
+  tryCount = 0
+  testBase$ = fileNameBase$
+
+  DO
+    fln$ = testBase$ + ".exe"
+
+    IF _FILEEXISTS(fln$) THEN
+      ' Pass the deletion command to the operating system to avoid fatal lock crashes
+      SHELL _HIDE "cmd /c del /q " + CHR$(34) + fln$ + CHR$(34)
+
+      ' If the file survives the OS deletion attempt, it is actively locked by a running process
+      IF _FILEEXISTS(fln$) THEN
+        tryCount = tryCount + 1
+
+        IF tryCount < 10 THEN
+          suffixStr$ = "_0" + LTRIM$(RTRIM$(STR$(tryCount)))
+        ELSE
+          suffixStr$ = "_" + LTRIM$(RTRIM$(STR$(tryCount)))
+        END IF
+
+        testBase$ = fileNameBase$ + suffixStr$
+      ELSE
+        EXIT DO
+      END IF
+    ELSE
+      EXIT DO
+    END IF
+  LOOP
+
+  ' Update the global base name so the IDE runner launches the newly generated executable
+  fileNameBase$ = testBase$
+
+  ffTmp = FREEFILE
+
+  OPEN fln$ FOR BINARY AS #ffTmp
+
+  IF outputFileIdx > 0 THEN
+    outStr$ = SPACE$(outputFileIdx)
+    FOR ii = 0 TO outputFileIdx - 1
+      ASC(outStr$, ii + 1) = outputFile(ii)
+    NEXT
+    PUT #ffTmp, , outStr$
+  END IF
+
+  CLOSE #ffTmp
+
+END SUB ' fileSaveBinary
+
+''''''''''''''''''''''''
+SUB fileOutputErrorReport (wStr1$, wStr2$)
+
+  rwVar$ = " " ' Necessary, or QB64 won't work correctly
+
+  fln$ = fileNameErr$
+
+  OPEN fln$ FOR BINARY AS #1
+  IF LOF(1) > 0 THEN
+    CLOSE #1
+    KILL fln$
+    OPEN fln$ FOR BINARY AS #1
+  END IF
+
+  FOR ix = 1 TO LEN(wStr1$)
+    rwVar$ = MID$(wStr1$, ix, 1)
+    PUT #1, , rwVar$
+  NEXT
+
+  rwVar$ = CHR$(13)
+  PUT #1, , rwVar$
+  rwVar$ = CHR$(10)
+  PUT #1, , rwVar$
+
+  IF wStr2$ <> "" THEN
+    FOR ix = 1 TO LEN(wStr2$)
+      rwVar$ = MID$(wStr2$, ix, 1)
+      PUT #1, , rwVar$
+    NEXT
+    rwVar$ = CHR$(13)
+    PUT #1, , rwVar$
+    rwVar$ = CHR$(10)
+    PUT #1, , rwVar$
+  END IF
+
+  CLOSE #1
+
+END SUB ' fileOutputErrorReport
+
+''''''''''''''''''''''''
+FUNCTION findComma (startIdx, endIdx)
+
+  DIM commaPos AS LONG
+
+  commaPos = 0
+  ff = findNextTokenAtDepth0(startIdx, endIdx, 256 + ASC(","))
+  IF ff = 1 THEN
+    commaPos = returnedData2
+  END IF
+
+  findComma = commaPos
+
+END FUNCTION ' findComma
+
+''''''''''''''''''''''''
+SUB findEditorNext
+
+  ' When a match is found, it performs the following tasks:
+  ' Updates the cursor position (editor.CursorX and editor.CursorY).
+  ' Sets the selection boundaries to highlight the found text.
+  ' Adjusts the horizontal and vertical scroll offsets so the found text is visible on the screen.
+  ' Assigns focus to the editor window.
+
+  IF editorSearchQuery$ = "" THEN EXIT SUB
+
+  foundMatch = 0
+  uQuery$ = UCASE$(editorSearchQuery$)
+
+  FOR iy = editor.CursorY TO editor.LastLine
+    uLine$ = UCASE$(editorText$(iy))
+    matchPos = INSTR(uLine$, uQuery$)
+
+    IF matchPos > 0 AND iy = editor.CursorY THEN
+      matchPos = INSTR(editor.CursorX + 2, uLine$, uQuery$)
+    END IF
+
+    IF matchPos > 0 THEN
+      editor.CursorY = iy
+      editor.CursorX = matchPos - 1
+      editor.SelectStartY = iy
+      editor.SelectStartX = matchPos - 1 + LEN(uQuery$)
+      editor.IsSelecting = 1
+      editor.Focus = 1
+
+      editor.ScrollY = editor.CursorY - 14
+      IF editor.ScrollY < 1 THEN editor.ScrollY = 1
+      editor.ScrollX = editor.CursorX - 20
+      IF editor.ScrollX < 0 THEN editor.ScrollX = 0
+
+      foundMatch = 1
+      EXIT FOR
+    END IF
+  NEXT
+
+  IF foundMatch = 0 THEN
+    FOR iy = 1 TO editor.CursorY
+      uLine$ = UCASE$(editorText$(iy))
+      matchPos = INSTR(uLine$, uQuery$)
+
+      IF matchPos > 0 THEN
+        editor.CursorY = iy
+        editor.CursorX = matchPos - 1
+        editor.SelectStartY = iy
+        editor.SelectStartX = matchPos - 1 + LEN(uQuery$)
+        editor.IsSelecting = 1
+        editor.Focus = 1
+
+        editor.ScrollY = editor.CursorY - 14
+        IF editor.ScrollY < 1 THEN editor.ScrollY = 1
+        editor.ScrollX = editor.CursorX - 20
+        IF editor.ScrollX < 0 THEN editor.ScrollX = 0
+
+        addStatusMsg "SEARCH RESTARTED AT TOP"
+
+        foundMatch = 1
+        EXIT FOR
+      END IF
+    NEXT
+  END IF
+
+  IF foundMatch = 0 THEN
+    addStatusMsg "SEARCH: NO MATCHES FOUND"
+  END IF
+
+END SUB ' findEditorNext
+''''''''''''''''''''''''
+''''''''''''''''''''''''
+SUB addStatusMsgContinuation (wMsg$)
+
+  IF statusGroupCount = 0 THEN
+    addStatusMsg wMsg$
+  ELSE
+    addStatusMsgToGroup wMsg$, statusGroupCount
+  END IF
+
+END SUB ' addStatusMsgContinuation
+
+''''''''''''''''''''''''
+SUB addStatusMsgToGroup (wMsg$, wGroupID AS _UNSIGNED LONG)
+
+  DIM lineNum AS LONG
+  DIM colonPos AS LONG
+
+  lineNum = 0
+
+  IF LEFT$(wMsg$, 11) = "ERROR line " THEN
+    colonPos = INSTR(wMsg$, ":")
+    IF colonPos > 12 THEN
+      lineNum = VAL(MID$(wMsg$, 12, colonPos - 12))
+    END IF
+  ELSE
+    IF LEFT$(wMsg$, 13) = "WARNING line " THEN
+      colonPos = INSTR(wMsg$, ":")
+      IF colonPos > 14 THEN
+        lineNum = VAL(MID$(wMsg$, 14, colonPos - 14))
+      END IF
+    END IF
+  END IF
+
+  compileStatusMsg$ = wMsg$
+
+  editorTextX = EDITOR_BOX_X + LEFT_SPACING
+  editorTextW = 56 * 8
+  statusBoxW = editorTextX + editorTextW + 3
+
+  maxLen = (statusBoxW - 16) \ 8
+
+  tempMsg$ = wMsg$
+  DO WHILE LEN(tempMsg$) > 0
+    IF LEN(tempMsg$) <= maxLen THEN
+      pushStatusMsg tempMsg$, lineNum, wGroupID
+      tempMsg$ = ""
+    ELSE
+      splitPos = maxLen
+      FOR ii = maxLen TO 1 STEP -1
+        IF MID$(tempMsg$, ii, 1) = " " THEN
+          splitPos = ii
+          EXIT FOR
+        END IF
+      NEXT
+      IF splitPos = maxLen THEN
+        pushStatusMsg LEFT$(tempMsg$, maxLen), lineNum, wGroupID
+        tempMsg$ = MID$(tempMsg$, maxLen + 1)
+      ELSE
+        pushStatusMsg LEFT$(tempMsg$, splitPos - 1), lineNum, wGroupID
+        tempMsg$ = MID$(tempMsg$, splitPos + 1)
+      END IF
+    END IF
+  LOOP
+
+END SUB ' addStatusMsgToGroup
+
+''''''''''''''''''''''''
+''''''''''''''''''''''''
+SUB undo_StateRestore
+
+  IF undoState.Ready = 0 THEN EXIT SUB
+
+  FOR ii = 1 TO undoState.LastLine
+    editorText$(ii) = undoText$(ii)
+  NEXT
+  FOR ii = undoState.LastLine + 1 TO editor.LastLine
+    editorText$(ii) = ""
+  NEXT
+
+  editor.CursorX = undoState.CursorX
+  editor.CursorY = undoState.CursorY
+  editor.ScrollX = undoState.ScrollX
+  editor.ScrollY = undoState.ScrollY
+  editor.LastLine = undoState.LastLine
+
+  undoState.Ready = 0
+  lastActionWasTyping = 0
+
+  addStatusMsg "UNDO USED"
+
+  refineCode 0, 0
+
+END SUB ' undo_StateRestore
+
+''''''''''''''''''''''''
+SUB undo_StateSave
+
+  FOR ii = 1 TO editor.LastLine
+    undoText$(ii) = editorText$(ii)
+  NEXT
+  FOR ii = editor.LastLine + 1 TO undoState.LastLine
+    undoText$(ii) = ""
+  NEXT
+
+  undoState.CursorX = editor.CursorX
+  undoState.CursorY = editor.CursorY
+  undoState.ScrollX = editor.ScrollX
+  undoState.ScrollY = editor.ScrollY
+  undoState.LastLine = editor.LastLine
+
+  undoState.Ready = 1
+
+END SUB ' undo_StateSave
+
+''''''''''''''''''''''''
+''''''''''''''''''''''''
+SUB throwCompilerError (errMsg$, wType, wData)
+
+  ' wData is a placeholder
+
+  IF wType = ASIS THEN
+    ' Centralized error helper to reduce boilerplate formatting as the compiler grows
+    addStatusMsg "ERROR line " + retLineNumberStr$ + ": " + errMsg$
+  ELSE ' WITHFAILED:
+    addStatusMsg "ERROR line " + retLineNumberStr$ + ": " + errMsg$ + " FAILED"
+  END IF
+
+  compileError = 1
+
+END SUB ' throwCompilerError
+
+'''''''''''''''''''''''
+SUB throwCompilerErrorAndCancelTira (errMsg$, wType, wData)
+
+  ' Combines two frequently used calls into one
+
+  tira_Cancel
+
+  throwCompilerError errMsg$, wType, wData
+
+END SUB ' throwCompilerErrorAndCancelTira
+
+'''''''''''''''''''''''
+SUB throwCompilerErrorNoLineNum (errMsg$)
+
+  addStatusMsg "ERROR: " + errMsg$
+  compileError = 1
+
+END SUB ' throwCompilerErrorNoLineNum
+

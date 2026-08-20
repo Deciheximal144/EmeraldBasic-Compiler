@@ -2,6 +2,14 @@
 ' The line with comment, dollar sign, and INCLUDE 'Z_EMLCMD.BLB' at the end of the EmeraldBasic file link this code in QB64PE
 ' For an EmeraldBasic compiler, use '#AUTOINCLUDE at the top of the file
 
+FUNCTION addStackSpace (wSize)
+
+  tempOffset = currentFrameSize
+  currentFrameSize = currentFrameSize + wSize
+  addStackSpace = tempOffset
+
+END FUNCTION ' addStackSpace
+
 ''''''''''''''''''''''''
 SUB emitRuntimeAxis
 
@@ -1602,6 +1610,2458 @@ SUB emitRuntimeWheel
 END SUB ' emitRuntimeWheel
 
 ''''''''''''''''''''''''
+SUB emitRuntimeClearVars
+
+  rtOffset(RT_CLEAR) = stream.emitPos
+
+  tira_Start
+  tiraRT_Prologue
+
+  DIM vIdx AS LONG
+  DIM dt AS LONG
+  DIM uIdx AS LONG
+  DIM iField AS LONG
+  DIM elemSize AS LONG
+  DIM totalElems AS LONG
+  DIM dataOffset AS LONG
+  DIM dataSize AS LONG
+  DIM fOffset AS LONG
+  DIM baseArr$
+  DIM iterVar$
+  DIM loopTop$
+  DIM loopEnd$
+  DIM slotAddr$
+  DIM handleVar$
+  DIM skipClose$
+  DIM firstChar$
+  DIM recName$
+  DIM arrAddr$
+  DIM dataAddr$
+  DIM descPtr$
+  DIM flagVal$
+  DIM flagPtr$
+  DIM skipFreeDescLbl$
+  DIM dataPtr$
+  DIM skipReinitLbl$
+  DIM jmpStrDone$
+  DIM strLen$
+  DIM basePtr$
+  DIM descAddr$
+  DIM emptyDescPtr$
+  DIM skipDescFree$
+  DIM secondChar$
+  DIM isEngine AS LONG
+
+  ' 1. Close all opened files
+  baseArr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADDRESS_OF, baseArr$, "!G_FLS_ARR_HANDLES", ""
+
+  iterVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign iterVar$, "1"
+
+  loopTop$ = tiraLabelCreateNew$("CLEAR_CLOSE_LOOP")
+  loopEnd$ = tiraLabelCreateNew$("CLEAR_CLOSE_END")
+
+  tiraLabel loopTop$
+  tiraJmpCond "JG", iterVar$, "255", loopEnd$
+
+  slotAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraLeaSIB slotAddr$, baseArr$, iterVar$, "8"
+
+  handleVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_READ_MEM, handleVar$ + ", " + slotAddr$
+
+  skipClose$ = tiraLabelCreateNew$("CLEAR_SKIP_CLOSE")
+  tiraJmpCond "JE", handleVar$, "0", skipClose$
+  tiraJmpCond "JE", handleVar$, "-1", skipClose$
+
+  tiraCall "IAT_CLOSEHANDLE", 1, handleVar$
+  tiraWriteMem slotAddr$, "0", "8"
+
+  tiraLabel skipClose$
+  tiraOp TC_ADD, iterVar$, iterVar$, "1"
+  tiraJmp loopTop$
+
+  tiraLabel loopEnd$
+
+  ' 2. Clear all global variables and arrays
+  IF symbolCount > 0 THEN
+    FOR vIdx = 0 TO symbolCount - 1
+      dt = symbols(vIdx).DataType
+      recName$ = RTRIM$(symbols(vIdx).RecordName)
+      firstChar$ = LEFT$(recName$, 1)
+      secondChar$ = MID$(recName$, 2, 1)
+
+      isEngine = 0
+      IF firstChar$ = "!" THEN
+        IF secondChar$ = "G" OR secondChar$ = "T" OR secondChar$ = "R" THEN isEngine = 1
+      END IF
+
+      ' Skip internal compiler variables, labels, and subroutines
+      IF isEngine = 0 AND firstChar$ <> "@" AND firstChar$ <> "%" AND dt <> TYPE_LABEL AND dt <> TYPE_UNDEFINED AND symbols(vIdx).SubIndex = 0 THEN
+        ' Exclude operating system IAT pointers and internal runtime helpers
+        IF LEFT$(recName$, 4) <> "IAT_" AND LEFT$(recName$, 3) <> "RT_" THEN
+          ' ONLY clear globals!
+          IF symbols(vIdx).ScopeID = 0 THEN
+
+            IF symbols(vIdx).IsArray > 0 THEN
+              ' Free dynamic string elements and dynamic array blocks
+              tiraScheduleArrayFree vIdx
+
+              IF symbols(vIdx).IsArray = 1 THEN
+                ' Zero out static array memory securely mapping the physical bounds
+                elemSize = retElementByteSize(vIdx)
+                totalElems = symbols(vIdx).Size
+                dataOffset = 16 + (symbols(vIdx).NumDimensions * 8)
+                dataSize = elemSize * totalElems
+
+                arrAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+                tiraOp TC_ADDRESS_OF, arrAddr$, "#" + LTRIM$(STR$(vIdx)), ""
+
+                dataAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+                tiraOp TC_ADD, dataAddr$, arrAddr$, LTRIM$(STR$(dataOffset))
+
+                tiraMemSet dataAddr$, "0", LTRIM$(STR$(dataSize))
+              ELSE
+                ' For dynamic arrays, clear the array pointer descriptor so it is removed
+                arrAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+                tiraOp TC_ADDRESS_OF, arrAddr$, "#" + LTRIM$(STR$(vIdx)), ""
+                tiraWriteMem arrAddr$, "0", "8"
+              END IF
+
+            ELSE
+              ' Scalar Variables
+              IF dt = TYPE_STRING THEN
+                descPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+                tiraAssign descPtr$, "#" + LTRIM$(STR$(vIdx))
+
+                flagVal$ = tiraDimVar$("T", TYPE_LONG)
+                flagPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+                tiraOp TC_ADD, flagPtr$, descPtr$, "16"
+                tiraNew TC_READ_MEM, flagVal$ + ", " + flagPtr$
+
+                skipFreeDescLbl$ = tiraLabelCreateNew$("CLR_SKIP_FREE")
+                tiraJmpCond "JNE", flagVal$, "1", skipFreeDescLbl$
+
+                dataPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+                tiraNew TC_READ_MEM, dataPtr$ + ", " + descPtr$
+                tiraJmpCond "JE", dataPtr$, "0", skipFreeDescLbl$
+
+                tiraCall "IAT_HEAPFREE", 3, "!G_MEM_PTR_PROCESS_HEAP, 0, " + dataPtr$
+
+                tiraLabel skipFreeDescLbl$
+
+                ' Re-initialize the descriptor
+                skipReinitLbl$ = tiraLabelCreateNew$("CLR_SKIP_REINIT")
+                tiraJmpCond "JNE", flagVal$, "1", skipReinitLbl$
+
+                tiraBuildStringDescriptor descPtr$, "0", "0", "0"
+
+                jmpStrDone$ = tiraLabelCreateNew$("CLR_STR_DONE")
+                tiraJmp jmpStrDone$
+
+                tiraLabel skipReinitLbl$
+                ' It is a fixed string. Memset its data to space (32)
+                dataPtr$ = tiraGetStringData$(descPtr$)
+                strLen$ = tiraGetStringLen$(descPtr$)
+                tiraMemSet dataPtr$, "32", strLen$
+
+                tiraLabel jmpStrDone$
+
+              ELSE
+                IF dt = TYPE_UDT THEN
+                  uIdx = symbols(vIdx).UDTIndex
+                  IF uIdx <> -1 THEN
+                    ' Must free dynamic strings within the scalar UDT
+                    FOR iField = 0 TO udts(uIdx).FieldCount - 1
+                      IF udtFields(uIdx, iField).DataType = TYPE_STRING AND udtFields(uIdx, iField).IsDynamicString = 1 THEN
+                        fOffset = udtFields(uIdx, iField).Offset
+                        basePtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+                        tiraOp TC_ADDRESS_OF, basePtr$, "#" + LTRIM$(STR$(vIdx)), ""
+
+                        descAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+                        IF fOffset > 0 THEN
+                          tiraOp TC_ADD, descAddr$, basePtr$, LTRIM$(STR$(fOffset))
+                        ELSE
+                          tiraAssign descAddr$, basePtr$
+                        END IF
+
+                        descPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+                        tiraNew TC_READ_MEM, descPtr$ + ", " + descAddr$
+
+                        skipFreeDescLbl$ = tiraLabelCreateNew$("CLR_SKIP_UDT_FREE")
+                        tiraJmpCond "JE", descPtr$, "0", skipFreeDescLbl$
+
+                        flagVal$ = tiraDimVar$("T", TYPE_LONG)
+                        flagPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+                        tiraOp TC_ADD, flagPtr$, descPtr$, "16"
+                        tiraNew TC_READ_MEM, flagVal$ + ", " + flagPtr$
+
+                        tiraJmpCond "JNE", flagVal$, "1", skipFreeDescLbl$
+
+                        dataPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+                        tiraNew TC_READ_MEM, dataPtr$ + ", " + descPtr$
+
+                        tiraJmpCond "JE", dataPtr$, "0", skipFreeDescLbl$
+                        tiraCall "IAT_HEAPFREE", 3, "!G_MEM_PTR_PROCESS_HEAP, 0, " + dataPtr$
+
+                        tiraLabel skipFreeDescLbl$
+
+                        emptyDescPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+                        tiraAssign emptyDescPtr$, "!G_SYS_DSC_EMPTY"
+                        skipDescFree$ = tiraLabelCreateNew$("CLR_SKIP_STR_FREE")
+                        tiraJmpCond "JE", descPtr$, "0", skipDescFree$
+                        tiraJmpCond "JE", descPtr$, emptyDescPtr$, skipDescFree$
+                        tiraCall "IAT_HEAPFREE", 3, "!G_MEM_PTR_PROCESS_HEAP, 0, " + descPtr$
+                        tiraLabel skipDescFree$
+                      END IF
+                    NEXT
+
+                    ' Zero the UDT memory block
+                    basePtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+                    tiraOp TC_ADDRESS_OF, basePtr$, "#" + LTRIM$(STR$(vIdx)), ""
+                    tiraMemSet basePtr$, "0", LTRIM$(STR$(udts(uIdx).TotalSize))
+                  END IF
+
+                ELSE
+                  ' Numeric scalar variable
+                  tiraAssign "#" + LTRIM$(STR$(vIdx)), "0"
+                END IF
+              END IF
+            END IF
+          END IF
+        END IF
+      END IF
+    NEXT
+  END IF
+
+  tiraRT_Epilogue
+  tira_EndAndProcess
+
+END SUB ' emitRuntimeClearVars
+
+''''''''''''''''''''''''
+SUB emitRuntimeCrlf
+
+  rtOffset(RT_CRLF) = stream.emitPos
+
+  tira_Start
+  tiraRT_Prologue
+
+  IF compileHasGraphics = 0 THEN
+    ' Console mode logic utilizing the rigorous scrolling APIs for VIEW PRINT
+
+    ' Call Windows API to get the standard output handle
+    stdOutConst$ = tiraDimVar$("T", TYPE_LONG)
+    tiraAssign stdOutConst$, "-11"
+    tiraCall "IAT_GETSTDHANDLE", 1, stdOutConst$
+    hndVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraNew TC_GET_RET, hndVar$
+
+    fallbackLbl$ = tiraLabelCreateNew$("CRLF_FALL")
+    manualLbl$ = tiraLabelCreateNew$("CRLF_MAN")
+    jmpDone$ = tiraLabelCreateNew$("CRLF_DONE")
+
+    ' Fast bypass check for full screen bounds (no manual scroll computation required)
+    tiraJmpCond "JG", "!G_INO_VAL_VIEW_TOP", "0", manualLbl$
+    tiraJmpCond "JL", "!G_INO_VAL_VIEW_BOT", "25", manualLbl$
+    tiraJmp fallbackLbl$
+
+    tiraLabel manualLbl$
+
+    ' Extract the hardware console cursor row
+    csbi$ = tiraAllocTempMem$("24")
+    tiraCall "IAT_GETCONSOLESCREENBUFFERINFO", 2, hndVar$ + ", " + csbi$
+    coordVar$ = tiraDimVar$("T", TYPE_LONG)
+    tiraNew TC_READ_MEM_OFFSET, coordVar$ + ", " + csbi$ + ", 4"
+    curY$ = tiraDimVar$("T", TYPE_LONG)
+    tiraOp TC_SHR, curY$, coordVar$, "16"
+
+    botMinusOne$ = tiraDimVar$("T", TYPE_LONG)
+    tiraOp TC_SUB, botMinusOne$, "!G_INO_VAL_VIEW_BOT", "1"
+
+    doScrollLbl$ = tiraLabelCreateNew$("CRLF_DOSCROLL")
+
+    ' Check if we hit the limit of the specific viewport
+    tiraJmpCond "JGE", curY$, botMinusOne$, doScrollLbl$
+
+    ' No scroll, advance cursor down cleanly
+    tiraOp TC_ADD, curY$, curY$, "1"
+    destCoord1$ = tiraDimVar$("T", TYPE_LONG)
+    tiraOp TC_SHL, destCoord1$, curY$, "16"
+    tiraCall "IAT_SETCONSOLECURSORPOSITION", 2, hndVar$ + ", " + destCoord1$
+    tiraJmp jmpDone$
+
+    tiraLabel doScrollLbl$
+
+    ' Execute localized block scroll
+    scrollRect$ = tiraAllocTempMem$("8")
+    tiraWriteMem scrollRect$, "0", "2"
+    topPlusOne$ = tiraDimVar$("T", TYPE_LONG)
+    tiraOp TC_ADD, topPlusOne$, "!G_INO_VAL_VIEW_TOP", "1"
+    tiraNew TC_WRITE_MEM_OFFSET, scrollRect$ + ", 2, " + topPlusOne$ + ", 2"
+
+    widthVar$ = tiraDimVar$("T", TYPE_LONG)
+    tiraNew TC_READ_MEM, widthVar$ + ", " + csbi$
+    tiraOp TC_AND, widthVar$, widthVar$, "65535"
+    tiraOp TC_SUB, widthVar$, widthVar$, "1"
+    tiraNew TC_WRITE_MEM_OFFSET, scrollRect$ + ", 4, " + widthVar$ + ", 2"
+    tiraNew TC_WRITE_MEM_OFFSET, scrollRect$ + ", 6, " + botMinusOne$ + ", 2"
+
+    destCoord2$ = tiraDimVar$("T", TYPE_LONG)
+    tiraOp TC_SHL, destCoord2$, "!G_INO_VAL_VIEW_TOP", "16"
+
+    charInfo$ = tiraAllocTempMem$("4")
+    tiraWriteMem charInfo$, "32", "2"
+    attrVar$ = tiraDimVar$("T", TYPE_LONG)
+    tiraNew TC_READ_MEM_OFFSET, attrVar$ + ", " + csbi$ + ", 8"
+    tiraNew TC_WRITE_MEM_OFFSET, charInfo$ + ", 2, " + attrVar$ + ", 2"
+
+    tiraCall "IAT_SCROLLCONSOLESCREENBUFFERA", 5, hndVar$ + ", " + scrollRect$ + ", 0, " + destCoord2$ + ", " + charInfo$
+
+    ' Zero out the bottom row block completely empty
+    destCoord3$ = tiraDimVar$("T", TYPE_LONG)
+    tiraOp TC_SHL, destCoord3$, botMinusOne$, "16"
+    numWrtPtr$ = tiraAllocTempMem$("4")
+
+    widthFill$ = tiraDimVar$("T", TYPE_LONG)
+    tiraOp TC_ADD, widthFill$, widthVar$, "1"
+
+    tiraCall "IAT_FILLCONSOLEOUTPUTCHARACTERA", 5, hndVar$ + ", 32, " + widthFill$ + ", " + destCoord3$ + ", " + numWrtPtr$
+    tiraCall "IAT_FILLCONSOLEOUTPUTATTRIBUTE", 5, hndVar$ + ", " + attrVar$ + ", " + widthFill$ + ", " + destCoord3$ + ", " + numWrtPtr$
+
+    tiraCall "IAT_SETCONSOLECURSORPOSITION", 2, hndVar$ + ", " + destCoord3$
+    tiraJmp jmpDone$
+
+    tiraLabel fallbackLbl$
+    ' Unrestricted hardware newline execution
+    descPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraAssign descPtr$, "!G_INO_DSC_CRLF"
+    strData$ = tiraGetStringData$(descPtr$)
+    strLen$ = tiraGetStringLen$(descPtr$)
+    numWrtFB$ = tiraDimVar$("T", TYPE_LONG)
+    numWrtFBPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraOp TC_ADDRESS_OF, numWrtFBPtr$, numWrtFB$, ""
+    tiraCall "IAT_WRITEFILE", 5, hndVar$ + ", " + strData$ + ", " + strLen$ + ", " + numWrtFBPtr$ + ", 0"
+
+    tiraLabel jmpDone$
+  ELSE
+    ' Graphics mode newline logic
+    tiraAssign "!G_GFX_VAL_CUR_X", "0"
+    tiraOp TC_ADD, "!G_GFX_VAL_CUR_Y", "!G_GFX_VAL_CUR_Y", "8"
+  END IF
+
+  tiraRT_Epilogue
+  tira_EndAndProcess
+
+END SUB ' emitRuntimeCrlf
+
+''''''''''''''
+'' SUB emitRuntimeDevice ' This is found within Z_EMLCMD.BLB
+'
+' Generates low-level machine instructions required to retrieve an input device description
+
+''''''''''''''
+'' SUB emitRuntimeDeviceInput ' This is found within Z_EMLCMD.BLB
+'
+' Generates low-level machine instructions required to poll connected hardware input events
+
+SUB emitRuntimeDeviceInput
+
+  rtOffset(RT_DEVICEINPUT) = stream.emitPos
+
+  tira_Start
+  tiraRT_Prologue
+
+  arg1Var$ = tiraDimVar$("ARG1", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, arg1Var$ + ", 1"
+
+  ' For now we will return 0 as a placeholder stub
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign resVar$, "0"
+
+  oldValid$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign oldValid$, "!G_INO_FLG_GAMEPAD_VALID"
+  oldUser$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign oldUser$, "!G_INO_V32_GAMEPAD_USER"
+  oldPacket$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign oldPacket$, "!G_INO_V32_GAMEPAD_PACKET"
+
+  heapMark$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign heapMark$, "!G_MEM_PTR_TEMP_HEAP"
+
+  statePtr$ = tiraAllocTempMem$("52")
+  capsPtr$ = tiraAllocTempMem$("404")
+  userIdx$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign userIdx$, "0"
+  deviceCount$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign deviceCount$, "0"
+
+  loopTop$ = tiraLabelCreateNew$("DEVIN_LOOP")
+  loopNext$ = tiraLabelCreateNew$("DEVIN_NEXT")
+  xinputDoneLbl$ = tiraLabelCreateNew$("DEVIN_XDONE")
+  foundLbl$ = tiraLabelCreateNew$("DEVIN_FOUND")
+  changedLbl$ = tiraLabelCreateNew$("DEVIN_CHANGED")
+  cacheLbl$ = tiraLabelCreateNew$("DEVIN_CACHE")
+  joyLoopTop$ = tiraLabelCreateNew$("DEVIN_JOY_LOOP")
+  joyLoopNext$ = tiraLabelCreateNew$("DEVIN_JOY_NEXT")
+  joyFoundLbl$ = tiraLabelCreateNew$("DEVIN_JOY_FOUND")
+  joyChangedLbl$ = tiraLabelCreateNew$("DEVIN_JOY_CHANGED")
+  joyCacheLbl$ = tiraLabelCreateNew$("DEVIN_JOY_CACHE")
+  notFoundLbl$ = tiraLabelCreateNew$("DEVIN_NOT_FOUND")
+  doneLbl$ = tiraLabelCreateNew$("DEVIN_DONE")
+
+  tiraLabel loopTop$
+  tiraJmpCond "JGE", userIdx$, "4", xinputDoneLbl$
+
+  tiraCall "IAT_XINPUTGETSTATE", 2, userIdx$ + ", " + statePtr$
+  statusVal$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_GET_RET, statusVal$
+  tiraJmpCond "JNE", statusVal$, "0", loopNext$
+
+  tiraOp TC_ADD, deviceCount$, deviceCount$, "1"
+  tiraJmpCond "JE", deviceCount$, arg1Var$, foundLbl$
+
+  tiraLabel loopNext$
+  tiraOp TC_ADD, userIdx$, userIdx$, "1"
+  tiraJmp loopTop$
+
+  tiraLabel xinputDoneLbl$
+  tiraJmpCond "JG", deviceCount$, "0", notFoundLbl$
+
+  tiraAssign userIdx$, "0"
+  tiraAssign deviceCount$, "0"
+
+  tiraLabel joyLoopTop$
+  tiraJmpCond "JGE", userIdx$, "16", notFoundLbl$
+
+  tiraNew TC_WRITE_MEM_OFFSET, statePtr$ + ", 0, 52, 4"
+  tiraNew TC_WRITE_MEM_OFFSET, statePtr$ + ", 4, 1279, 4"
+  tiraNew TC_WRITE_MEM_OFFSET, statePtr$ + ", 40, -1, 4"
+  tiraCall "IAT_JOYGETPOSEX", 2, userIdx$ + ", " + statePtr$
+  tiraNew TC_GET_RET, statusVal$
+  tiraJmpCond "JNE", statusVal$, "0", joyLoopNext$
+
+  tiraOp TC_ADD, deviceCount$, deviceCount$, "1"
+  tiraJmpCond "JE", deviceCount$, arg1Var$, joyFoundLbl$
+
+  tiraLabel joyLoopNext$
+  tiraOp TC_ADD, userIdx$, userIdx$, "1"
+  tiraJmp joyLoopTop$
+
+  tiraLabel foundLbl$
+  packetVal$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_READ_MEM, packetVal$ + ", " + statePtr$
+
+  tiraJmpCond "JE", oldValid$, "0", changedLbl$
+  tiraJmpCond "JNE", oldUser$, userIdx$, changedLbl$
+  tiraJmpCond "JNE", oldPacket$, packetVal$, changedLbl$
+  tiraJmp cacheLbl$
+
+  tiraLabel changedLbl$
+  tiraAssign resVar$, "-1"
+
+  tiraLabel cacheLbl$
+  tiraAssign "!G_INO_FLG_GAMEPAD_VALID", "1"
+  tiraAssign "!G_INO_V32_GAMEPAD_USER", userIdx$
+  tiraAssign "!G_INO_V32_GAMEPAD_PACKET", packetVal$
+
+  buttonsVal$ = tiraDimVar$("T", TYPE_UINTEGER)
+  tiraNew TC_READ_MEM_OFFSET, buttonsVal$ + ", " + statePtr$ + ", 4"
+  tiraAssign "!G_INO_V32_GAMEPAD_BUTTONS", buttonsVal$
+
+  leftTrigger$ = tiraDimVar$("T", TYPE_UBYTE)
+  tiraNew TC_READ_MEM_OFFSET, leftTrigger$ + ", " + statePtr$ + ", 6"
+  tiraAssign "!G_INO_V32_GAMEPAD_LT", leftTrigger$
+
+  rightTrigger$ = tiraDimVar$("T", TYPE_UBYTE)
+  tiraNew TC_READ_MEM_OFFSET, rightTrigger$ + ", " + statePtr$ + ", 7"
+  tiraAssign "!G_INO_V32_GAMEPAD_RT", rightTrigger$
+
+  leftX$ = tiraDimVar$("T", TYPE_INTEGER)
+  tiraNew TC_READ_MEM_OFFSET, leftX$ + ", " + statePtr$ + ", 8"
+  tiraAssign "!G_INO_V32_GAMEPAD_LX", leftX$
+
+  leftY$ = tiraDimVar$("T", TYPE_INTEGER)
+  tiraNew TC_READ_MEM_OFFSET, leftY$ + ", " + statePtr$ + ", 10"
+  tiraAssign "!G_INO_V32_GAMEPAD_LY", leftY$
+
+  rightX$ = tiraDimVar$("T", TYPE_INTEGER)
+  tiraNew TC_READ_MEM_OFFSET, rightX$ + ", " + statePtr$ + ", 12"
+  tiraAssign "!G_INO_V32_GAMEPAD_RX", rightX$
+
+  rightY$ = tiraDimVar$("T", TYPE_INTEGER)
+  tiraNew TC_READ_MEM_OFFSET, rightY$ + ", " + statePtr$ + ", 14"
+  tiraAssign "!G_INO_V32_GAMEPAD_RY", rightY$
+  tiraJmp doneLbl$
+
+  tiraLabel joyFoundLbl$
+  tiraMemSet capsPtr$, "0", "404"
+  tiraCall "IAT_JOYGETDEVCAPSA", 3, userIdx$ + ", " + capsPtr$ + ", 404"
+  capsStatus$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_GET_RET, capsStatus$
+
+  joyCaps$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign joyCaps$, "0"
+
+  joyCapsDoneLbl$ = tiraLabelCreateNew$("DEVIN_JOY_CAPS_DONE")
+  tiraJmpCond "JNE", capsStatus$, "0", joyCapsDoneLbl$
+  tiraNew TC_READ_MEM_OFFSET, joyCaps$ + ", " + capsPtr$ + ", 96"
+  tiraLabel joyCapsDoneLbl$
+
+  rawX$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_READ_MEM_OFFSET, rawX$ + ", " + statePtr$ + ", 8"
+
+  rawY$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_READ_MEM_OFFSET, rawY$ + ", " + statePtr$ + ", 12"
+
+  rawZ$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_READ_MEM_OFFSET, rawZ$ + ", " + statePtr$ + ", 16"
+
+  rawR$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_READ_MEM_OFFSET, rawR$ + ", " + statePtr$ + ", 20"
+
+  rawButtons$ = tiraDimVar$("T", TYPE_ULONG)
+  tiraNew TC_READ_MEM_OFFSET, rawButtons$ + ", " + statePtr$ + ", 32"
+
+  povVal$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_READ_MEM_OFFSET, povVal$ + ", " + statePtr$ + ", 40"
+
+  leftX$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_SUB, leftX$, rawX$, "32768"
+
+  leftY$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_SUB, leftY$, "32768", rawY$
+
+  rightX$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_SUB, rightX$, rawZ$, "32768"
+
+  rightY$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_SUB, rightY$, "32768", rawR$
+
+  povDoneLbl$ = tiraLabelCreateNew$("DEVIN_POV_DONE")
+  povUpLbl$ = tiraLabelCreateNew$("DEVIN_POV_UP")
+  povUpDoneLbl$ = tiraLabelCreateNew$("DEVIN_POV_UP_DONE")
+  povRightDoneLbl$ = tiraLabelCreateNew$("DEVIN_POV_RIGHT_DONE")
+  povDownDoneLbl$ = tiraLabelCreateNew$("DEVIN_POV_DOWN_DONE")
+  povLeftDoneLbl$ = tiraLabelCreateNew$("DEVIN_POV_LEFT_DONE")
+
+  povAvailable$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_AND, povAvailable$, joyCaps$, "16"
+  tiraJmpCond "JE", povAvailable$, "0", povDoneLbl$
+
+  tiraJmpCond "JE", povVal$, "-1", povDoneLbl$
+  tiraJmpCond "JE", povVal$, "65535", povDoneLbl$
+
+  tiraAssign leftX$, "0"
+  tiraAssign leftY$, "0"
+
+  tiraJmpCond "JLE", povVal$, "4500", povUpLbl$
+  tiraJmpCond "JGE", povVal$, "31500", povUpLbl$
+  tiraJmp povUpDoneLbl$
+
+  tiraLabel povUpLbl$
+  tiraAssign leftY$, "32767"
+
+  tiraLabel povUpDoneLbl$
+  tiraJmpCond "JL", povVal$, "4500", povRightDoneLbl$
+  tiraJmpCond "JG", povVal$, "13500", povRightDoneLbl$
+  tiraAssign leftX$, "32767"
+
+  tiraLabel povRightDoneLbl$
+  tiraJmpCond "JL", povVal$, "13500", povDownDoneLbl$
+  tiraJmpCond "JG", povVal$, "22500", povDownDoneLbl$
+  tiraAssign leftY$, "-32768"
+
+  tiraLabel povDownDoneLbl$
+  tiraJmpCond "JL", povVal$, "22500", povLeftDoneLbl$
+  tiraJmpCond "JG", povVal$, "31500", povLeftDoneLbl$
+  tiraAssign leftX$, "-32768"
+
+  tiraLabel povLeftDoneLbl$
+  tiraLabel povDoneLbl$
+
+  buttonsVal$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign buttonsVal$, "0"
+  buttonTest$ = tiraDimVar$("T", TYPE_LONG)
+
+  button1DoneLbl$ = tiraLabelCreateNew$("DEVIN_BTN1_DONE")
+  tiraOp TC_AND, buttonTest$, rawButtons$, "1"
+  tiraJmpCond "JE", buttonTest$, "0", button1DoneLbl$
+  tiraOp TC_OR, buttonsVal$, buttonsVal$, "16384"
+  tiraLabel button1DoneLbl$
+
+  button2DoneLbl$ = tiraLabelCreateNew$("DEVIN_BTN2_DONE")
+  tiraOp TC_AND, buttonTest$, rawButtons$, "2"
+  tiraJmpCond "JE", buttonTest$, "0", button2DoneLbl$
+  tiraOp TC_OR, buttonsVal$, buttonsVal$, "8192"
+  tiraLabel button2DoneLbl$
+
+  button3DoneLbl$ = tiraLabelCreateNew$("DEVIN_BTN3_DONE")
+  tiraOp TC_AND, buttonTest$, rawButtons$, "4"
+  tiraJmpCond "JE", buttonTest$, "0", button3DoneLbl$
+  tiraOp TC_OR, buttonsVal$, buttonsVal$, "4096"
+  tiraLabel button3DoneLbl$
+
+  button4DoneLbl$ = tiraLabelCreateNew$("DEVIN_BTN4_DONE")
+  tiraOp TC_AND, buttonTest$, rawButtons$, "8"
+  tiraJmpCond "JE", buttonTest$, "0", button4DoneLbl$
+  tiraOp TC_OR, buttonsVal$, buttonsVal$, "32768"
+  tiraLabel button4DoneLbl$
+
+  button5DoneLbl$ = tiraLabelCreateNew$("DEVIN_BTN5_DONE")
+  tiraOp TC_AND, buttonTest$, rawButtons$, "16"
+  tiraJmpCond "JE", buttonTest$, "0", button5DoneLbl$
+  tiraOp TC_OR, buttonsVal$, buttonsVal$, "256"
+  tiraLabel button5DoneLbl$
+
+  button6DoneLbl$ = tiraLabelCreateNew$("DEVIN_BTN6_DONE")
+  tiraOp TC_AND, buttonTest$, rawButtons$, "32"
+  tiraJmpCond "JE", buttonTest$, "0", button6DoneLbl$
+  tiraOp TC_OR, buttonsVal$, buttonsVal$, "512"
+  tiraLabel button6DoneLbl$
+
+  button9DoneLbl$ = tiraLabelCreateNew$("DEVIN_BTN9_DONE")
+  tiraOp TC_AND, buttonTest$, rawButtons$, "256"
+  tiraJmpCond "JE", buttonTest$, "0", button9DoneLbl$
+  tiraOp TC_OR, buttonsVal$, buttonsVal$, "32"
+  tiraLabel button9DoneLbl$
+
+  button10DoneLbl$ = tiraLabelCreateNew$("DEVIN_BTN10_DONE")
+  tiraOp TC_AND, buttonTest$, rawButtons$, "512"
+  tiraJmpCond "JE", buttonTest$, "0", button10DoneLbl$
+  tiraOp TC_OR, buttonsVal$, buttonsVal$, "16"
+  tiraLabel button10DoneLbl$
+
+  packetVal$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign packetVal$, buttonsVal$
+  tiraOp TC_MUL, packetVal$, packetVal$, "31"
+  tiraOp TC_ADD, packetVal$, packetVal$, leftX$
+  tiraOp TC_MUL, packetVal$, packetVal$, "31"
+  tiraOp TC_ADD, packetVal$, packetVal$, leftY$
+  tiraOp TC_MUL, packetVal$, packetVal$, "31"
+  tiraOp TC_ADD, packetVal$, packetVal$, rightX$
+  tiraOp TC_MUL, packetVal$, packetVal$, "31"
+  tiraOp TC_ADD, packetVal$, packetVal$, rightY$
+  tiraOp TC_MUL, packetVal$, packetVal$, "31"
+  tiraOp TC_ADD, packetVal$, packetVal$, povVal$
+
+  joyUser$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_ADD, joyUser$, userIdx$, "16"
+
+  tiraJmpCond "JE", oldValid$, "0", joyChangedLbl$
+  tiraJmpCond "JNE", oldUser$, joyUser$, joyChangedLbl$
+  tiraJmpCond "JNE", oldPacket$, packetVal$, joyChangedLbl$
+  tiraJmp joyCacheLbl$
+
+  tiraLabel joyChangedLbl$
+  tiraAssign resVar$, "-1"
+
+  tiraLabel joyCacheLbl$
+  tiraAssign "!G_INO_FLG_GAMEPAD_VALID", "1"
+  tiraAssign "!G_INO_V32_GAMEPAD_USER", joyUser$
+  tiraAssign "!G_INO_V32_GAMEPAD_PACKET", packetVal$
+  tiraAssign "!G_INO_V32_GAMEPAD_BUTTONS", buttonsVal$
+  tiraAssign "!G_INO_V32_GAMEPAD_LT", "0"
+  tiraAssign "!G_INO_V32_GAMEPAD_RT", "0"
+  tiraAssign "!G_INO_V32_GAMEPAD_LX", leftX$
+  tiraAssign "!G_INO_V32_GAMEPAD_LY", leftY$
+  tiraAssign "!G_INO_V32_GAMEPAD_RX", rightX$
+  tiraAssign "!G_INO_V32_GAMEPAD_RY", rightY$
+  tiraJmp doneLbl$
+
+  tiraLabel notFoundLbl$
+  tiraAssign "!G_INO_FLG_GAMEPAD_VALID", "0"
+  tiraAssign "!G_INO_V32_GAMEPAD_USER", "0"
+  tiraAssign "!G_INO_V32_GAMEPAD_PACKET", "0"
+  tiraAssign "!G_INO_V32_GAMEPAD_BUTTONS", "0"
+  tiraAssign "!G_INO_V32_GAMEPAD_LT", "0"
+  tiraAssign "!G_INO_V32_GAMEPAD_RT", "0"
+  tiraAssign "!G_INO_V32_GAMEPAD_LX", "0"
+  tiraAssign "!G_INO_V32_GAMEPAD_LY", "0"
+  tiraAssign "!G_INO_V32_GAMEPAD_RX", "0"
+  tiraAssign "!G_INO_V32_GAMEPAD_RY", "0"
+
+  tiraLabel doneLbl$
+  tiraAssign "!G_MEM_PTR_TEMP_HEAP", heapMark$
+  tiraNew TC_ABI_WRITE_RET, resVar$
+
+  tiraRT_Epilogue
+  tira_EndAndProcess
+
+END SUB ' emitRuntimeDeviceInput
+
+
+''''''''''''''
+'' SUB emitRuntimeDevices ' This is found within Z_EMLCMD.BLB
+'
+' Generates low-level machine instructions required to count connected input devices
+
+''''''''''''''''''''''''
+SUB emitRuntimeFullscreen
+
+  rtOffset(RT_FULLSCREEN) = stream.emitPos
+
+  tira_Start
+  tiraRT_Prologue
+
+  ' GetSystemMetrics(SM_CXSCREEN = 0)
+  tiraCall "IAT_GETSYSTEMMETRICS", 1, "0"
+  tiraNew TC_GET_RET, "!G_WND_VAL_WIDTH"
+
+  ' GetSystemMetrics(SM_CYSCREEN = 1)
+  tiraCall "IAT_GETSYSTEMMETRICS", 1, "1"
+  tiraNew TC_GET_RET, "!G_WND_VAL_HEIGHT"
+
+  ' SetWindowLongA(HWND, GWL_STYLE = -16, WS_POPUP | WS_VISIBLE = -1879048192)
+  tiraCall "IAT_SETWINDOWLONGA", 3, "!G_WND_VAL_HWND, -16, -1879048192"
+
+  ' SetWindowPos(HWND, HWND_TOP = 0, 0, 0, cx, cy, SWP_SHOWWINDOW | SWP_FRAMECHANGED = 96)
+  tiraCall "IAT_SETWINDOWPOS", 7, "!G_WND_VAL_HWND, 0, 0, 0, !G_WND_VAL_WIDTH, !G_WND_VAL_HEIGHT, 96"
+
+  tiraAssign "!G_GFX_VAL_IS_FULLSCREEN", "1"
+
+  tiraRT_Epilogue
+  tira_EndAndProcess
+
+END SUB ' emitRuntimeFullscreen
+
+''''''''''''''''''''''''
+SUB emitRuntimeInput
+
+  rtOffset(RT_INPUT) = stream.emitPos
+
+  tira_Start
+  tiraRT_Prologue
+
+  ' Capture incoming ABI hardware registers into TIRA accessible global memory slots
+  arg1Var$ = tiraDimVar$("ARG1", TYPE_INTEGER64)
+  tiraNew TC_ABI_READ_ARG, arg1Var$ + ", 1"
+  arg2Var$ = tiraDimVar$("ARG2", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, arg2Var$ + ", 2"
+  arg3Var$ = tiraDimVar$("ARG3", TYPE_INTEGER64)
+  tiraNew TC_ABI_READ_ARG, arg3Var$ + ", 3"
+  arg4Var$ = tiraDimVar$("ARG4", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, arg4Var$ + ", 4"
+  arg5Var$ = tiraDimVar$("ARG5", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, arg5Var$ + ", 5"
+
+  ' Cache the arguments securely to survive nested runtime calls which will clobber the !G_SYS_RT_ARG slots
+  targetAddrVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign targetAddrVar$, arg1Var$
+
+  isStrVarVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign isStrVarVar$, arg2Var$
+
+  promptPtrVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign promptPtrVar$, arg3Var$
+
+  tgtDataTypeVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign tgtDataTypeVar$, arg4Var$
+
+  suppressNewlineVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign suppressNewlineVar$, arg5Var$
+
+  ' Allocate a pristine 1024 byte buffer directly on the temporary heap
+  bufPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign bufPtr$, "!G_MEM_PTR_TEMP_HEAP"
+  tiraOp TC_SUB, bufPtr$, bufPtr$, "1024"
+  tiraAssign "!G_MEM_PTR_TEMP_HEAP", bufPtr$
+
+  bufLen$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign bufLen$, "0"
+
+  IF compileHasGraphics = 0 THEN
+    ' Console mode logic
+    tiraCall "RT_PRINT_STR", 1, promptPtrVar$
+
+    hndVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraCall "IAT_GETSTDHANDLE", 1, "-10"
+    tiraNew TC_GET_RET, hndVar$
+
+    numWrtPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraOp TC_ADDRESS_OF, numWrtPtr$, bufLen$, ""
+
+    tiraCall "IAT_READFILE", 5, hndVar$ + ", " + bufPtr$ + ", 1024, " + numWrtPtr$ + ", 0"
+  ELSE
+    ' Graphics mode delta rendering logic
+    promptData$ = tiraGetStringData$(promptPtrVar$)
+    promptLen$ = tiraGetStringLen$(promptPtrVar$)
+
+    ' Print the prompt string directly to the screen immediately
+    skipPromptLbl$ = tiraLabelCreateNew$("INP_SKIP_PRMPT")
+    tiraJmpCond "JLE", promptLen$, "0", skipPromptLbl$
+    tiraCall "RT_GFX_APPEND", 2, promptData$ + ", " + promptLen$
+    tiraLabel skipPromptLbl$
+
+    ' Unconditionally flush the screen buffer before blocking execution so prior PRINT statements are visible
+    tiraCall "RT_SWAP_BUFFERS", 0, ""
+
+    ' Fetch pointer structures for reading directly from the OS queue
+    headPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraOp TC_ADDRESS_OF, headPtr$, "!G_INO_VAL_KBD_HEAD", ""
+    tailPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraOp TC_ADDRESS_OF, tailPtr$, "!G_INO_VAL_KBD_TAIL", ""
+
+    ' Spinlock: wait for ENTER to be released BEFORE capturing input to prevent skipping
+    lblWaitEnterRel1$ = tiraLabelCreateNew$("INP_WAIT_REL1")
+    tiraLabel lblWaitEnterRel1$
+    tiraCall "IAT_GETASYNCKEYSTATE", 1, "13"
+    entState1$ = tiraDimVar$("T", TYPE_LONG)
+    tiraNew TC_GET_RET, entState1$
+    tiraOp TC_AND, entState1$, entState1$, "32768"
+    skipSleep1$ = tiraLabelCreateNew$("INP_SS1")
+    tiraJmpCond "JE", entState1$, "0", skipSleep1$
+    tiraCall "IAT_SLEEP", 1, "1"
+    tiraJmp lblWaitEnterRel1$
+    tiraLabel skipSleep1$
+
+    ' Flush the OS keyboard ring buffer to clear ghost type-ahead keys completely
+    flushHeadVal$ = tiraDimVar$("T", TYPE_LONG)
+    tiraNew TC_READ_MEM, flushHeadVal$ + ", " + headPtr$
+    tiraWriteMem tailPtr$, flushHeadVal$, "4"
+
+    ' Ultra-fast spin loop (No IAT_SLEEP latency penalty for responsive typing)
+    loopTop$ = tiraLabelCreateNew$("INP_LOOP")
+    tiraLabel loopTop$
+
+    headVal$ = tiraDimVar$("T", TYPE_LONG)
+    tiraNew TC_READ_MEM, headVal$ + ", " + headPtr$
+
+    tailVal$ = tiraDimVar$("T", TYPE_LONG)
+    tiraNew TC_READ_MEM, tailVal$ + ", " + tailPtr$
+
+    tiraJmpCond "JE", headVal$, tailVal$, loopTop$
+
+    ' Read Char from the tail
+    charBufPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraOp TC_ADDRESS_OF, charBufPtr$, "!G_INO_ARR_KBD_BUF", ""
+
+    charAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraOp TC_ADD, charAddr$, charBufPtr$, tailVal$
+
+    charByte$ = tiraDimVar$("T", TYPE_UBYTE)
+    tiraNew TC_READ_MEM, charByte$ + ", " + charAddr$
+
+    charVal$ = tiraDimVar$("T", TYPE_LONG)
+    tiraAssign charVal$, charByte$
+
+    ' Advance Tail
+    tiraOp TC_ADD, tailVal$, tailVal$, "1"
+    tiraOp TC_AND, tailVal$, tailVal$, "255"
+    tiraWriteMem tailPtr$, tailVal$, "4"
+
+    doneLbl$ = tiraLabelCreateNew$("INP_DONE")
+    tiraJmpCond "JE", charVal$, "13", doneLbl$ ' Enter key finishes the routine
+
+    notBsLbl$ = tiraLabelCreateNew$("INP_NOT_BS")
+    tiraJmpCond "JNE", charVal$, "8", notBsLbl$ ' Backspace key
+
+    ' Backspace logic
+    skipBsLbl$ = tiraLabelCreateNew$("INP_SKIP_BS")
+    tiraJmpCond "JLE", bufLen$, "0", skipBsLbl$
+    tiraOp TC_SUB, bufLen$, bufLen$, "1"
+
+    ' Step cursor backward by one character width (8 pixels)
+    tiraOp TC_SUB, "!G_GFX_VAL_CUR_X", "!G_GFX_VAL_CUR_X", "8"
+    skipWrapLbl$ = tiraLabelCreateNew$("INP_SKIP_WRAP")
+    tiraJmpCond "JGE", "!G_GFX_VAL_CUR_X", "0", skipWrapLbl$
+    wrapX$ = tiraDimVar$("T", TYPE_LONG)
+    tiraAssign wrapX$, LTRIM$(STR$(gfxConfig.SizeX))
+    tiraOp TC_SUB, "!G_GFX_VAL_CUR_X", wrapX$, "8"
+    tiraOp TC_SUB, "!G_GFX_VAL_CUR_Y", "!G_GFX_VAL_CUR_Y", "8"
+    tiraLabel skipWrapLbl$
+
+    ' Save Cursor
+    tempX$ = tiraDimVar$("T", TYPE_LONG)
+    tempY$ = tiraDimVar$("T", TYPE_LONG)
+    tiraAssign tempX$, "!G_GFX_VAL_CUR_X"
+    tiraAssign tempY$, "!G_GFX_VAL_CUR_Y"
+
+    ' Erase with Space
+    spaceAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraOp TC_ADD, spaceAddr$, bufPtr$, bufLen$
+    tiraWriteMem spaceAddr$, "32", "1"
+    tiraCall "RT_GFX_APPEND", 2, spaceAddr$ + ", 1"
+
+    ' Restore Cursor
+    tiraAssign "!G_GFX_VAL_CUR_X", tempX$
+    tiraAssign "!G_GFX_VAL_CUR_Y", tempY$
+
+    tiraCall "RT_SWAP_BUFFERS", 0, ""
+
+    tiraLabel skipBsLbl$
+    tiraJmp loopTop$
+
+    ' Printable char logic
+    tiraLabel notBsLbl$
+
+    ' Only append if printable ASCII (32 to 126)
+    skipKey$ = tiraLabelCreateNew$("INP_SKIP")
+    tiraJmpCond "JL", charVal$, "32", skipKey$
+    tiraJmpCond "JG", charVal$, "126", skipKey$
+
+    destCharAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraOp TC_ADD, destCharAddr$, bufPtr$, bufLen$
+    tiraWriteMem destCharAddr$, charVal$, "1"
+    tiraOp TC_ADD, bufLen$, bufLen$, "1"
+
+    ' Delta Render: Append the single new character directly to the screen
+    tiraCall "RT_GFX_APPEND", 2, destCharAddr$ + ", 1"
+    tiraCall "RT_SWAP_BUFFERS", 0, ""
+
+    tiraLabel skipKey$
+    tiraJmp loopTop$
+
+    tiraLabel doneLbl$
+
+    ' Spinlock: wait for ENTER to be released after submitting input
+    lblWaitEnterRel2$ = tiraLabelCreateNew$("INP_WAIT_REL2")
+    tiraLabel lblWaitEnterRel2$
+    tiraCall "IAT_GETASYNCKEYSTATE", 1, "13"
+    entState2$ = tiraDimVar$("T", TYPE_LONG)
+    tiraNew TC_GET_RET, entState2$
+    tiraOp TC_AND, entState2$, entState2$, "32768"
+    skipSleep2$ = tiraLabelCreateNew$("INP_SS2")
+    tiraJmpCond "JE", entState2$, "0", skipSleep2$
+    tiraCall "IAT_SLEEP", 1, "1"
+    tiraJmp lblWaitEnterRel2$
+    tiraLabel skipSleep2$
+
+    skipCrlfLbl$ = tiraLabelCreateNew$("INP_SKIP_CRLF")
+    tiraJmpCond "JNE", suppressNewlineVar$, "0", skipCrlfLbl$
+    tiraCall "RT_CRLF", 0, ""
+    tiraLabel skipCrlfLbl$
+  END IF
+
+  endInputLbl$ = tiraLabelCreateNew$("INP_END")
+  notStrLbl$ = tiraLabelCreateNew$("INP_NOT_STR")
+
+  tiraJmpCond "JE", isStrVarVar$, "0", notStrLbl$
+
+  ' Handle string variable assignment
+  stripLoop$ = tiraLabelCreateNew$("INP_STRIP")
+  stripDone$ = tiraLabelCreateNew$("INP_STRIP_DONE")
+
+  tiraLabel stripLoop$
+  tiraJmpCond "JLE", bufLen$, "0", stripDone$
+
+  lastCharAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, lastCharAddr$, bufPtr$, bufLen$
+  tiraOp TC_SUB, lastCharAddr$, lastCharAddr$, "1"
+  lastChar$ = tiraDimVar$("T", TYPE_UBYTE)
+  tiraNew TC_READ_MEM, lastChar$ + ", " + lastCharAddr$
+
+  isCrLfLbl$ = tiraLabelCreateNew$("INP_ISCRLF")
+  tiraJmpCond "JE", lastChar$, "13", isCrLfLbl$
+  tiraJmpCond "JNE", lastChar$, "10", stripDone$
+
+  tiraLabel isCrLfLbl$
+  tiraOp TC_SUB, bufLen$, bufLen$, "1"
+  tiraJmp stripLoop$
+  tiraLabel stripDone$
+
+  ' Build a 24-byte fake descriptor dynamically
+  rhsDesc$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign rhsDesc$, "!G_MEM_PTR_TEMP_HEAP"
+  tiraOp TC_SUB, rhsDesc$, rhsDesc$, "24"
+  tiraAssign "!G_MEM_PTR_TEMP_HEAP", rhsDesc$
+
+  tiraBuildStringDescriptor rhsDesc$, bufPtr$, bufLen$, "0"
+
+  tiraCall "RT_STR_ASSIGN", 2, targetAddrVar$ + ", " + rhsDesc$
+  tiraJmp endInputLbl$
+
+  ' Handle numeric variable assignment
+  tiraLabel notStrLbl$
+
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign resVar$, "0"
+  isNeg$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign isNeg$, "0"
+
+  skipLoop$ = tiraLabelCreateNew$("INP_NSKIP")
+  skipDone$ = tiraLabelCreateNew$("INP_NSKIP_DN")
+
+  tiraLabel skipLoop$
+  tiraJmpCond "JLE", bufLen$, "0", skipDone$
+  byteVal$ = tiraDimVar$("T", TYPE_UBYTE)
+  tiraNew TC_READ_MEM, byteVal$ + ", " + bufPtr$
+
+  isSpcLbl$ = tiraLabelCreateNew$("INP_ISSPC")
+  tiraJmpCond "JE", byteVal$, "32", isSpcLbl$
+  tiraJmpCond "JE", byteVal$, "13", isSpcLbl$
+  tiraJmpCond "JE", byteVal$, "10", isSpcLbl$
+  tiraJmp skipDone$
+
+  tiraLabel isSpcLbl$
+  tiraOp TC_ADD, bufPtr$, bufPtr$, "1"
+  tiraOp TC_SUB, bufLen$, bufLen$, "1"
+  tiraJmp skipLoop$
+
+  tiraLabel skipDone$
+
+  signDone$ = tiraLabelCreateNew$("VAL_SGN_DONE")
+  tiraJmpCond "JLE", bufLen$, "0", signDone$
+  tiraNew TC_READ_MEM, byteVal$ + ", " + bufPtr$
+  tiraJmpCond "JNE", byteVal$, "45", signDone$ ' -
+  tiraAssign isNeg$, "1"
+  tiraOp TC_ADD, bufPtr$, bufPtr$, "1"
+  tiraOp TC_SUB, bufLen$, bufLen$, "1"
+
+  tiraLabel signDone$
+
+  numLoopTop$ = tiraLabelCreateNew$("VAL_NUM_LOOP")
+  numLoopDone$ = tiraLabelCreateNew$("VAL_NUM_DONE")
+
+  tiraLabel numLoopTop$
+  tiraJmpCond "JLE", bufLen$, "0", numLoopDone$
+  tiraNew TC_READ_MEM, byteVal$ + ", " + bufPtr$
+
+  tiraJmpCond "JL", byteVal$, "48", numLoopDone$ ' 0
+  tiraJmpCond "JG", byteVal$, "57", numLoopDone$ ' 9
+
+  tiraOp TC_SUB, byteVal$, byteVal$, "48"
+  tiraOp TC_MUL, resVar$, resVar$, "10"
+  tiraOp TC_ADD, resVar$, resVar$, byteVal$
+
+  tiraOp TC_ADD, bufPtr$, bufPtr$, "1"
+  tiraOp TC_SUB, bufLen$, bufLen$, "1"
+  tiraJmp numLoopTop$
+
+  tiraLabel numLoopDone$
+
+  applySignDone$ = tiraLabelCreateNew$("VAL_SGN_APP")
+  tiraJmpCond "JE", isNeg$, "0", applySignDone$
+  tiraOp TC_NEG, resVar$, resVar$, ""
+  tiraLabel applySignDone$
+
+  lblSingle$ = tiraLabelCreateNew$("IS_SNG")
+  lblDouble$ = tiraLabelCreateNew$("IS_DBL")
+  lblByte$ = tiraLabelCreateNew$("IS_BYT")
+  lblInt$ = tiraLabelCreateNew$("IS_INT")
+  lblLong$ = tiraLabelCreateNew$("IS_LNG")
+  lblWriteDone$ = tiraLabelCreateNew$("WR_DONE")
+
+  tiraJmpCond "JE", tgtDataTypeVar$, LTRIM$(STR$(TYPE_SINGLE)), lblSingle$
+  tiraJmpCond "JE", tgtDataTypeVar$, LTRIM$(STR$(TYPE_DOUBLE)), lblDouble$
+  tiraJmpCond "JE", tgtDataTypeVar$, LTRIM$(STR$(TYPE_BYTE)), lblByte$
+  tiraJmpCond "JE", tgtDataTypeVar$, LTRIM$(STR$(TYPE_UBYTE)), lblByte$
+  tiraJmpCond "JE", tgtDataTypeVar$, LTRIM$(STR$(TYPE_INTEGER)), lblInt$
+  tiraJmpCond "JE", tgtDataTypeVar$, LTRIM$(STR$(TYPE_UINTEGER)), lblInt$
+  tiraJmpCond "JE", tgtDataTypeVar$, LTRIM$(STR$(TYPE_LONG)), lblLong$
+  tiraJmpCond "JE", tgtDataTypeVar$, LTRIM$(STR$(TYPE_ULONG)), lblLong$
+
+  tiraWriteMem targetAddrVar$, resVar$, "8"
+  tiraJmp lblWriteDone$
+
+  tiraLabel lblSingle$
+  tiraWriteMem targetAddrVar$, resVar$, "SINGLE"
+  tiraJmp lblWriteDone$
+
+  tiraLabel lblDouble$
+  tiraWriteMem targetAddrVar$, resVar$, "DOUBLE"
+  tiraJmp lblWriteDone$
+
+  tiraLabel lblByte$
+  tiraWriteMem targetAddrVar$, resVar$, "1"
+  tiraJmp lblWriteDone$
+
+  tiraLabel lblInt$
+  tiraWriteMem targetAddrVar$, resVar$, "2"
+  tiraJmp lblWriteDone$
+
+  tiraLabel lblLong$
+  tiraWriteMem targetAddrVar$, resVar$, "4"
+
+  tiraLabel lblWriteDone$
+
+  tiraLabel endInputLbl$
+
+  tiraRT_Epilogue
+
+  tira_EndAndProcess
+
+END SUB ' emitRuntimeInput
+
+''''''''''''''''''''''''
+SUB emitRuntimeKeyDown
+
+  DIM qb AS LONG
+  DIM vk AS LONG
+
+  ' Build the key mapping data as a string payload to sit in the global literal pool
+  mapPayload$ = ""
+  FOR ii = 0 TO keyMappingCount - 1
+    ' Append qbCode (4 bytes)
+    qb = keyMapping(ii).qbCode
+    mapPayload$ = mapPayload$ + CHR$(qb AND 255) + CHR$((qb \ 256) AND 255) + CHR$((qb \ 65536) AND 255) + CHR$((qb \ 16777216) AND 255)
+    ' Append vkCode (4 bytes)
+    vk = keyMapping(ii).vkCode
+    mapPayload$ = mapPayload$ + CHR$(vk AND 255) + CHR$((vk \ 256) AND 255) + CHR$((vk \ 65536) AND 255) + CHR$((vk \ 16777216) AND 255)
+  NEXT
+
+  ff = resolveSymbol("!G_INO_DSC_KEYMAP")
+  IF ff = 1 THEN
+    mapIdx = returnedData2
+    strVarData$(mapIdx) = mapPayload$
+  END IF
+
+  '''' RT_KEYDOWN
+  rtOffset(RT_KEYDOWN) = stream.emitPos
+
+  tira_Start
+  tiraRT_Prologue
+
+  arg1Var$ = tiraDimVar$("ARG1", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, arg1Var$ + ", 1"
+
+  ' Load the requested key code
+  qbCode$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign qbCode$, arg1Var$
+
+  ' Extract the data pointer from the string descriptor
+  tableDesc$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign tableDesc$, "!G_INO_DSC_KEYMAP"
+  tablePtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_READ_MEM, tablePtr$ + ", " + tableDesc$
+
+  ' Counter for mapped items
+  count$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign count$, LTRIM$(STR$(keyMappingCount))
+
+  vkCode$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign vkCode$, qbCode$
+
+  loopScanStart$ = tiraLabelCreateNew$("KD_SCAN_LOOP")
+  jmpDoneScan$ = tiraLabelCreateNew$("KD_SCAN_DONE")
+
+  tiraLabel loopScanStart$
+
+  ' If mapped items remain <= 0, we're done (not found in table)
+  tiraJmpCond "JLE", count$, "0", jmpDoneScan$
+
+  ' Compare table[index].qbCode with the requested code
+  curQb$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_READ_MEM, curQb$ + ", " + tablePtr$
+
+  jmpFound$ = tiraLabelCreateNew$("KD_FOUND")
+  tiraJmpCond "JE", curQb$, qbCode$, jmpFound$
+
+  ' Advance to next 8-byte entry (qbCode + vkCode layout)
+  tiraOp TC_ADD, tablePtr$, tablePtr$, "8"
+  tiraOp TC_SUB, count$, count$, "1"
+  tiraJmp loopScanStart$
+
+  ' Match found, extract table[index].vkCode
+  tiraLabel jmpFound$
+  vkPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, vkPtr$, tablePtr$, "4"
+  tiraNew TC_READ_MEM, vkCode$ + ", " + vkPtr$
+
+  tiraLabel jmpDoneScan$
+
+  ' Setup layout state extraction directly from the WndProc populated array
+  tiraOp TC_AND, vkCode$, vkCode$, "255"
+
+  stateAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADDRESS_OF, stateAddr$, "!G_INO_ARR_KBD_STATE", ""
+  tiraOp TC_ADD, stateAddr$, stateAddr$, vkCode$
+
+  keyByte$ = tiraDimVar$("T", TYPE_UBYTE)
+  tiraNew TC_READ_MEM, keyByte$ + ", " + stateAddr$
+
+  keyState$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign keyState$, keyByte$
+
+  retVal$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign retVal$, "0"
+
+  jmpIsDown$ = tiraLabelCreateNew$("KD_IS_DOWN")
+  tiraJmpCond "JNE", keyState$, "0", jmpIsDown$
+
+  ' Not down (return 0)
+  jmpEnd$ = tiraLabelCreateNew$("KD_END")
+  tiraJmp jmpEnd$
+
+  tiraLabel jmpIsDown$
+  ' Is down (return -1)
+  tiraAssign retVal$, "-1"
+
+  tiraLabel jmpEnd$
+
+  ' Route return value to arg1Var$ so it can be extracted to RAX cleanly
+  tiraAssign arg1Var$, retVal$
+
+  tiraNew TC_ABI_WRITE_RET, arg1Var$
+  tiraRT_Epilogue
+
+  tira_EndAndProcess
+
+END SUB ' emitRuntimeKeyDown
+
+''''''''''''''''''''''''
+SUB emitRuntimeLimit
+
+  rtOffset(RT_LIMIT) = stream.emitPos
+
+  tira_Start
+  tiraRT_Prologue
+
+  arg1Var$ = tiraDimVar$("ARG1", TYPE_DOUBLE)
+  tiraNew TC_ABI_READ_ARG, arg1Var$ + ", 1"
+
+  fpsInt$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_CAST, fpsInt$, arg1Var$, LTRIM$(STR$(TYPE_LONG))
+
+  doneLbl$ = tiraLabelCreateNew$("LIM_DONE")
+  tiraJmpCond "JLE", fpsInt$, "0", doneLbl$
+
+  msPerFrame$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_IDIV, msPerFrame$, "1000", fpsInt$
+
+  loopTop$ = tiraLabelCreateNew$("LIM_TOP")
+  tiraLabel loopTop$
+
+  tiraCall "IAT_GETTICKCOUNT", 0, ""
+  curTick$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_GET_RET, curTick$
+
+  diffTick$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_SUB, diffTick$, curTick$, "!G_SYS_VAL_LIMIT_TICK"
+
+  tiraJmpCond "JGE", diffTick$, msPerFrame$, doneLbl$
+
+  tiraCall "IAT_SLEEP", 1, "1"
+  tiraJmp loopTop$
+
+  tiraLabel doneLbl$
+  tiraCall "IAT_GETTICKCOUNT", 0, ""
+  newTick$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_GET_RET, newTick$
+  tiraAssign "!G_SYS_VAL_LIMIT_TICK", newTick$
+
+  tiraRT_Epilogue
+  tira_EndAndProcess
+
+END SUB ' emitRuntimeLimit
+
+''''''''''''''''''''''''
+SUB emitRuntimePcopy
+
+  rtOffset(RT_PCOPY) = stream.emitPos
+
+  tira_Start
+  tiraRT_Prologue
+
+  argSrc$ = tiraDimVar$("ARG1", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, argSrc$ + ", 1"
+  argDest$ = tiraDimVar$("ARG2", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, argDest$ + ", 2"
+
+  lblDone$ = tiraLabelCreateNew$("PCOPY_DONE")
+
+  ' Skip if src equals dest
+  tiraJmpCond "JE", argSrc$, argDest$, lblDone$
+
+  ' Validate pages (0 to 3 natively supported)
+  tiraJmpCond "JL", argSrc$, "0", lblDone$
+  tiraJmpCond "JG", argSrc$, "3", lblDone$
+  tiraJmpCond "JL", argDest$, "0", lblDone$
+  tiraJmpCond "JG", argDest$, "3", lblDone$
+
+  ' Acquire Spinlock safely using hardware XCHG
+  lblSpin$ = tiraLabelCreateNew$("PCOPY_SPIN")
+  lblAcq$ = tiraLabelCreateNew$("PCOPY_ACQ")
+  tiraLabel lblSpin$
+  spinVal$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign spinVal$, "1"
+  tiraNew TC_XCHG, "!G_WND_FLG_RENDER_LOCK, " + spinVal$ + ", 4"
+  tiraJmpCond "JE", spinVal$, "0", lblAcq$
+  tiraCall "IAT_SLEEP", 1, "0"
+  tiraJmp lblSpin$
+  tiraLabel lblAcq$
+
+  fbSize$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign fbSize$, LTRIM$(STR$(gfxConfig.SizeX * gfxConfig.SizeY))
+
+  txtSize$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign txtSize$, LTRIM$(STR$(4096 * layout.GfxBufEntrySize))
+
+  lblSrc0$ = tiraLabelCreateNew$("SRC_0")
+  lblSrc1$ = tiraLabelCreateNew$("SRC_1")
+  lblSrc2$ = tiraLabelCreateNew$("SRC_2")
+  lblSrc3$ = tiraLabelCreateNew$("SRC_3")
+  lblSrcEnd$ = tiraLabelCreateNew$("SRC_END")
+
+  ptrSrcFb$ = tiraDimVar$("T", TYPE_INTEGER64)
+  ptrSrcBuf$ = tiraDimVar$("T", TYPE_INTEGER64)
+  cntSrcBuf$ = tiraDimVar$("T", TYPE_LONG)
+
+  tiraJmpCond "JE", argSrc$, "0", lblSrc0$
+  tiraJmpCond "JE", argSrc$, "1", lblSrc1$
+  tiraJmpCond "JE", argSrc$, "2", lblSrc2$
+  tiraJmpCond "JE", argSrc$, "3", lblSrc3$
+  tiraJmp lblDone$
+
+  tiraLabel lblSrc0$
+  tiraAssign ptrSrcFb$, "!G_GFX_PTR_FRMB_BACK"
+  tiraAssign ptrSrcBuf$, "!G_GFX_PTR_BUFR_BACK"
+  tiraAssign cntSrcBuf$, "!G_GFX_VAL_BUFR_COUNT_BACK"
+  tiraJmp lblSrcEnd$
+
+  tiraLabel lblSrc1$
+  tiraAssign ptrSrcFb$, "!G_GFX_PTR_FRMB_FRONT"
+  tiraAssign ptrSrcBuf$, "!G_GFX_PTR_BUFR_FRONT"
+  tiraAssign cntSrcBuf$, "!G_GFX_VAL_BUFR_COUNT_FRONT"
+  tiraJmp lblSrcEnd$
+
+  tiraLabel lblSrc2$
+  tiraAssign ptrSrcFb$, "!G_GFX_PTR_FRMB_PAGE2"
+  tiraAssign ptrSrcBuf$, "!G_GFX_PTR_BUFR_PAGE2"
+  tiraAssign cntSrcBuf$, "!G_GFX_VAL_BUFR_COUNT_PAGE2"
+  tiraJmp lblSrcEnd$
+
+  tiraLabel lblSrc3$
+  tiraAssign ptrSrcFb$, "!G_GFX_PTR_FRMB_PAGE3"
+  tiraAssign ptrSrcBuf$, "!G_GFX_PTR_BUFR_PAGE3"
+  tiraAssign cntSrcBuf$, "!G_GFX_VAL_BUFR_COUNT_PAGE3"
+
+  tiraLabel lblSrcEnd$
+
+  lblDest0$ = tiraLabelCreateNew$("DEST_0")
+  lblDest1$ = tiraLabelCreateNew$("DEST_1")
+  lblDest2$ = tiraLabelCreateNew$("DEST_2")
+  lblDest3$ = tiraLabelCreateNew$("DEST_3")
+  lblDestEnd$ = tiraLabelCreateNew$("DEST_END")
+
+  ptrDestFb$ = tiraDimVar$("T", TYPE_INTEGER64)
+  ptrDestBuf$ = tiraDimVar$("T", TYPE_INTEGER64)
+
+  tiraJmpCond "JE", argDest$, "0", lblDest0$
+  tiraJmpCond "JE", argDest$, "1", lblDest1$
+  tiraJmpCond "JE", argDest$, "2", lblDest2$
+  tiraJmpCond "JE", argDest$, "3", lblDest3$
+  tiraJmp lblDone$
+
+  tiraLabel lblDest0$
+  tiraAssign ptrDestFb$, "!G_GFX_PTR_FRMB_BACK"
+  tiraAssign ptrDestBuf$, "!G_GFX_PTR_BUFR_BACK"
+  tiraJmp lblDestEnd$
+
+  tiraLabel lblDest1$
+  tiraAssign ptrDestFb$, "!G_GFX_PTR_FRMB_FRONT"
+  tiraAssign ptrDestBuf$, "!G_GFX_PTR_BUFR_FRONT"
+  tiraJmp lblDestEnd$
+
+  tiraLabel lblDest2$
+  tiraAssign ptrDestFb$, "!G_GFX_PTR_FRMB_PAGE2"
+  tiraAssign ptrDestBuf$, "!G_GFX_PTR_BUFR_PAGE2"
+  tiraJmp lblDestEnd$
+
+  tiraLabel lblDest3$
+  tiraAssign ptrDestFb$, "!G_GFX_PTR_FRMB_PAGE3"
+  tiraAssign ptrDestBuf$, "!G_GFX_PTR_BUFR_PAGE3"
+
+  tiraLabel lblDestEnd$
+
+  tiraMemcpy ptrDestFb$, ptrSrcFb$, fbSize$
+  tiraMemcpy ptrDestBuf$, ptrSrcBuf$, txtSize$
+
+  lblWrite0$ = tiraLabelCreateNew$("WR_0")
+  lblWrite1$ = tiraLabelCreateNew$("WR_1")
+  lblWrite2$ = tiraLabelCreateNew$("WR_2")
+  lblWrite3$ = tiraLabelCreateNew$("WR_3")
+  lblWriteEnd$ = tiraLabelCreateNew$("WR_END")
+
+  tiraJmpCond "JE", argDest$, "0", lblWrite0$
+  tiraJmpCond "JE", argDest$, "1", lblWrite1$
+  tiraJmpCond "JE", argDest$, "2", lblWrite2$
+  tiraJmpCond "JE", argDest$, "3", lblWrite3$
+  tiraJmp lblWriteEnd$
+
+  tiraLabel lblWrite0$
+  tiraAssign "!G_GFX_VAL_BUFR_COUNT_BACK", cntSrcBuf$
+  tiraJmp lblWriteEnd$
+
+  tiraLabel lblWrite1$
+  tiraAssign "!G_GFX_VAL_BUFR_COUNT_FRONT", cntSrcBuf$
+  tiraJmp lblWriteEnd$
+
+  tiraLabel lblWrite2$
+  tiraAssign "!G_GFX_VAL_BUFR_COUNT_PAGE2", cntSrcBuf$
+  tiraJmp lblWriteEnd$
+
+  tiraLabel lblWrite3$
+  tiraAssign "!G_GFX_VAL_BUFR_COUNT_PAGE3", cntSrcBuf$
+
+  tiraLabel lblWriteEnd$
+
+  ' Release Spinlock
+  tiraAssign "!G_WND_FLG_RENDER_LOCK", "0"
+
+  ' Instruct Windows to repaint the window using the newly swapped destination buffer ONLY if it is the active visual frame (Page 1 / FRONT)
+  lblSkipRedraw$ = tiraLabelCreateNew$("SKIP_REDRAW")
+  tiraJmpCond "JNE", argDest$, "1", lblSkipRedraw$
+  tiraCall "IAT_INVALIDATERECT", 3, "!G_WND_VAL_HWND, 0, 0"
+  tiraLabel lblSkipRedraw$
+
+  tiraLabel lblDone$
+
+  tiraRT_Epilogue
+  tira_EndAndProcess
+
+END SUB ' emitRuntimePcopy
+
+''''''''''''''''''''''''
+SUB emitRuntimePlotPixel
+
+  '''' RT_PLOT_PIXEL
+  rtOffset(RT_PLOT_PIXEL) = stream.emitPos
+
+  tira_Start
+  tiraRT_Prologue
+
+  arg1Var$ = tiraDimVar$("ARG1", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, arg1Var$ + ", 1"
+  arg2Var$ = tiraDimVar$("ARG2", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, arg2Var$ + ", 2"
+  arg3Var$ = tiraDimVar$("ARG3", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, arg3Var$ + ", 3"
+
+  endLbl$ = tiraLabelCreateNew$("PLOT_END")
+
+  ' Shift target coordinates into absolute mapped variables utilizing global offsets
+  absX$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_ADD, absX$, arg1Var$, "!G_GFX_VAL_VIEW_OFFSET_X"
+  absY$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_ADD, absY$, arg2Var$, "!G_GFX_VAL_VIEW_OFFSET_Y"
+
+  ' Execute strict bounds testing securely trapping plotting within graphical VIEW logic
+  tiraJmpCond "JL", absX$, "!G_GFX_VAL_VIEW_X1", endLbl$
+  tiraJmpCond "JGE", absX$, "!G_GFX_VAL_VIEW_X2", endLbl$
+  tiraJmpCond "JL", absY$, "!G_GFX_VAL_VIEW_Y1", endLbl$
+  tiraJmpCond "JGE", absY$, "!G_GFX_VAL_VIEW_Y2", endLbl$
+
+  ' Unsigned JAE hardware test to physically prevent screen buffer overrun exceptions
+  tiraJmpCond "JAE", absX$, LTRIM$(RTRIM$(STR$(gfxConfig.SizeX))), endLbl$
+  tiraJmpCond "JAE", absY$, LTRIM$(RTRIM$(STR$(gfxConfig.SizeY))), endLbl$
+
+  ' Calculate offset targeting the working screen buffer
+  tiraOp TC_MUL, "!G_GFX_IDX_PLOT_OFFSET", absY$, LTRIM$(RTRIM$(STR$(gfxConfig.SizeX)))
+  tiraOp TC_ADD, "!G_GFX_IDX_PLOT_OFFSET", "!G_GFX_IDX_PLOT_OFFSET", absX$
+
+  ' Fetch framebuffer base pointer dynamically through the targeted active destination memory
+  tiraAssign "!G_GFX_PTR_PLOT_FBBASE", "!G_GFX_PTR_DEST_FRMB"
+
+  ' Target address
+  tiraOp TC_ADD, "!G_GFX_PTR_PLOT_TARGET", "!G_GFX_PTR_PLOT_FBBASE", "!G_GFX_IDX_PLOT_OFFSET"
+
+  ' Write byte to framebuffer
+  tiraWriteMem "!G_GFX_PTR_PLOT_TARGET", arg3Var$, "1"
+
+  tiraAssign "!G_GFX_FLG_DISPLAYI_PENDING", "1"
+
+  tiraLabel endLbl$
+
+  tiraRT_Epilogue
+  tira_EndAndProcess
+
+END SUB ' emitRuntimePlotPixel
+
+''''''''''''''''''''''''
+SUB emitRuntimePrintInt
+
+  rtOffset(RT_PRINT_INT) = stream.emitPos
+
+  tira_Start
+  tiraRT_Prologue
+
+  arg1Var$ = tiraDimVar$("ARG1", TYPE_INTEGER64)
+  tiraNew TC_ABI_READ_ARG, arg1Var$ + ", 1"
+
+  ' Use !G_MEM_PTR_TEMP_HEAP as the high-end of our temporary string scratchpad.
+  ' We do not permanently allocate it because the string is consumed instantly.
+  ptr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign ptr$, "!G_MEM_PTR_TEMP_HEAP"
+
+  valVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign valVar$, arg1Var$
+
+  isNeg$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign isNeg$, "0"
+
+  skipNegLbl$ = tiraLabelCreateNew$("PI_SKIP_NEG")
+  tiraJmpCond "JGE", valVar$, "0", skipNegLbl$
+  tiraAssign isNeg$, "1"
+  tiraLabel skipNegLbl$
+
+  ' Add the trailing space required by QB64 PRINT formatting FIRST (since we build backwards)
+  ' When the #EMERALD directive is active, we intentionally omit this trailing space so
+  ' consecutive prints display tighter together, while retaining standard QBasic leading spaces.
+  IF compileEmeraldMode = 0 THEN
+    tiraOp TC_SUB, ptr$, ptr$, "1"
+    tiraWriteMem ptr$, "32", "1"
+  END IF
+
+  loopTop$ = tiraLabelCreateNew$("PI_LOOP")
+  tiraLabel loopTop$
+
+  ' digit = val MOD 10
+  digit$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_MOD, digit$, valVar$, "10"
+
+  skipDigitNegLbl$ = tiraLabelCreateNew$("PI_SKIP_DNEG")
+  tiraJmpCond "JGE", digit$, "0", skipDigitNegLbl$
+  tiraOp TC_NEG, digit$, digit$, ""
+  tiraLabel skipDigitNegLbl$
+
+  ' char = digit + 48
+  charVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_ADD, charVar$, digit$, "48"
+
+  ' ptr = ptr - 1
+  tiraOp TC_SUB, ptr$, ptr$, "1"
+
+  ' Write byte to temporary string buffer
+  tiraWriteMem ptr$, charVar$, "1"
+
+  ' val = val / 10
+  tiraOp TC_IDIV, valVar$, valVar$, "10"
+
+  ' Continue loop if val != 0
+  tiraJmpCond "JNE", valVar$, "0", loopTop$
+
+  ' Add leading sign OR space for positive numbers required by QB64 PRINT formatting
+  tiraOp TC_SUB, ptr$, ptr$, "1"
+  skipSpaceLbl$ = tiraLabelCreateNew$("PI_SKIP_SPC")
+  tiraJmpCond "JE", isNeg$, "0", skipSpaceLbl$
+  tiraWriteMem ptr$, "45", "1" ' 45 is '-'
+  jmpDoneLbl$ = tiraLabelCreateNew$("PI_DONE")
+  tiraJmp jmpDoneLbl$
+  tiraLabel skipSpaceLbl$
+  tiraWriteMem ptr$, "32", "1" ' 32 is Space
+  tiraLabel jmpDoneLbl$
+
+  ' Calculate strLen = !G_MEM_PTR_TEMP_HEAP - ptr
+  strLen$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_SUB, strLen$, "!G_MEM_PTR_TEMP_HEAP", ptr$
+
+  IF compileHasGraphics = 0 THEN
+    ' Console output via WriteFile
+    ' Use a strict TYPE_LONG variable to pass -11 to guarantee 32-bit parameter size
+    stdOutConst$ = tiraDimVar$("T", TYPE_LONG)
+    tiraAssign stdOutConst$, "-11"
+
+    ' Call Windows API to get the standard output handle
+    tiraCall "IAT_GETSTDHANDLE", 1, stdOutConst$
+    ' Retrieve the returned handle into a temporary variable
+    hndVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraNew TC_GET_RET, hndVar$
+
+    ' Provide a safe throwaway memory address for the bytes written output
+    numWrt$ = tiraDimVar$("T", TYPE_LONG)
+    numWrtPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraOp TC_ADDRESS_OF, numWrtPtr$, numWrt$, ""
+
+    ' Write the integer string to the console
+    tiraCall "IAT_WRITEFILE", 5, hndVar$ + ", " + ptr$ + ", " + strLen$ + ", " + numWrtPtr$ + ", 0"
+  ELSE
+    ' Graphics output via GfxAppend
+    tiraCall "RT_GFX_APPEND", 2, ptr$ + ", " + strLen$
+  END IF
+
+  tiraRT_Epilogue
+  tira_EndAndProcess
+
+END SUB ' emitRuntimePrintInt
+
+''''''''''''''''''''''''
+SUB emitRuntimePrintFloat
+
+  rtOffset(RT_PRINT_FLOAT) = stream.emitPos
+
+  tira_Start
+  tiraRT_Prologue
+
+  arg1Var$ = tiraDimVar$("ARG1", TYPE_DOUBLE)
+  tiraNew TC_ABI_READ_ARG, arg1Var$ + ", 1"
+
+  arg2Var$ = tiraDimVar$("ARG2", TYPE_INTEGER64)
+  tiraNew TC_ABI_READ_ARG, arg2Var$ + ", 2"
+
+  ' Allocate 64 bytes on the temporary heap for the sprintf buffer natively
+  basePtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign basePtr$, "!G_MEM_PTR_TEMP_HEAP"
+  tiraOp TC_SUB, basePtr$, basePtr$, "64"
+  tiraAssign "!G_MEM_PTR_TEMP_HEAP", basePtr$
+
+  ' Read the pointer to the format string payload passed as arg 2
+  fmtPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_READ_MEM, fmtPtr$ + ", " + arg2Var$
+
+  ' Call sprintf natively using TIRA. The backend will perfectly mirror the
+  ' float variable into both XMM2 and R8 to satisfy the Windows Varargs ABI.
+  tiraCall "IAT_SPRINTF", 3, basePtr$ + ", " + fmtPtr$ + ", " + arg1Var$
+
+  ' Capture the return length from sprintf
+  strLen$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_GET_RET, strLen$
+
+  IF compileHasGraphics = 0 THEN
+    ' Use a strict TYPE_LONG variable to pass -11 to guarantee 32-bit parameter size
+    stdOutConst$ = tiraDimVar$("T", TYPE_LONG)
+    tiraAssign stdOutConst$, "-11"
+
+    ' Call Windows API to get the standard output handle
+    tiraCall "IAT_GETSTDHANDLE", 1, stdOutConst$
+
+    ' Retrieve the returned handle into a temporary variable
+    hndVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraNew TC_GET_RET, hndVar$
+
+    ' Provide a safe throwaway memory address for the bytes written output
+    numWrt$ = tiraDimVar$("T", TYPE_LONG)
+    numWrtPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraOp TC_ADDRESS_OF, numWrtPtr$, numWrt$, ""
+
+    ' Write the float string to the console
+    tiraCall "IAT_WRITEFILE", 5, hndVar$ + ", " + basePtr$ + ", " + strLen$ + ", " + numWrtPtr$ + ", 0"
+  ELSE
+    ' Graphics output via GfxAppend
+    tiraCall "RT_GFX_APPEND", 2, basePtr$ + ", " + strLen$
+  END IF
+
+  tiraRT_Epilogue
+  tira_EndAndProcess
+
+END SUB ' emitRuntimePrintFloat
+
+''''''''''''''''''''''''
+SUB emitRuntimePrintStr
+
+  rtOffset(RT_PRINT_STR) = stream.emitPos
+
+  tira_Start
+  tiraRT_Prologue
+
+  arg1Var$ = tiraDimVar$("ARG1", TYPE_INTEGER64)
+  tiraNew TC_ABI_READ_ARG, arg1Var$ + ", 1"
+
+  IF compileHasGraphics = 0 THEN
+    ' Use a strict TYPE_LONG variable to pass -11 to guarantee 32-bit parameter size
+    stdOutConst$ = tiraDimVar$("T", TYPE_LONG)
+    tiraAssign stdOutConst$, "-11"
+
+    ' Call Windows API to get the standard output handle
+    tiraCall "IAT_GETSTDHANDLE", 1, stdOutConst$
+
+    ' Retrieve the returned handle into a temporary varia5ble
+    hndVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraNew TC_GET_RET, hndVar$
+
+    ' Read the memory address and length of the string data from the descriptor
+    strData$ = tiraGetStringData$(arg1Var$)
+    strLen$ = tiraGetStringLen$(arg1Var$)
+
+    ' Provide a safe throwaway memory address for the bytes written output
+    numWrt$ = tiraDimVar$("T", TYPE_LONG)
+    numWrtPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraOp TC_ADDRESS_OF, numWrtPtr$, numWrt$, ""
+
+    ' Write the string to the console
+    tiraCall "IAT_WRITEFILE", 5, hndVar$ + ", " + strData$ + ", " + strLen$ + ", " + numWrtPtr$ + ", 0"
+  ELSE
+    ' Graphics mode
+
+    ' Read the memory address and length of the string data from the descriptor
+    strData$ = tiraGetStringData$(arg1Var$)
+    strLen$ = tiraGetStringLen$(arg1Var$)
+
+    ' Call RT_GFX_APPEND, pass data pointer and length
+    tiraCall "RT_GFX_APPEND", 2, strData$ + ", " + strLen$
+  END IF
+
+  tiraRT_Epilogue
+  tira_EndAndProcess
+
+
+END SUB ' emitRuntimePrintStr
+
+''''''''''''''''''''''''
+SUB emitRuntimePutImage
+
+  rtOffset(33) = stream.emitPos
+
+  tira_Start
+  tiraRT_Prologue
+
+  destX1$ = tiraDimVar$("ARG1", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, destX1$ + ", 1"
+  destY1$ = tiraDimVar$("ARG2", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, destY1$ + ", 2"
+  destX2$ = tiraDimVar$("ARG3", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, destX2$ + ", 3"
+  destY2$ = tiraDimVar$("ARG4", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, destY2$ + ", 4"
+  argSrc$ = tiraDimVar$("ARG5", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, argSrc$ + ", 5"
+  argDest$ = tiraDimVar$("ARG6", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, argDest$ + ", 6"
+
+  heapMark$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign heapMark$, "!G_MEM_PTR_TEMP_HEAP"
+
+  lblDone$ = tiraLabelCreateNew$("PUTIMG_DONE")
+
+  skipXSwap$ = tiraLabelCreateNew$("PUTIMG_SKIP_X")
+  tiraJmpCond "JLE", destX1$, destX2$, skipXSwap$
+  ptr1$ = tiraDimVar$("T", TYPE_INTEGER64)
+  ptr2$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADDRESS_OF, ptr1$, destX1$, ""
+  tiraOp TC_ADDRESS_OF, ptr2$, destX2$, ""
+  tiraSwapMem ptr1$, ptr2$, "4"
+  tiraLabel skipXSwap$
+
+  skipYSwap$ = tiraLabelCreateNew$("PUTIMG_SKIP_Y")
+  tiraJmpCond "JLE", destY1$, destY2$, skipYSwap$
+  ptr1_y$ = tiraDimVar$("T", TYPE_INTEGER64)
+  ptr2_y$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADDRESS_OF, ptr1_y$, destY1$, ""
+  tiraOp TC_ADDRESS_OF, ptr2_y$, destY2$, ""
+  tiraSwapMem ptr1_y$, ptr2_y$, "4"
+  tiraLabel skipYSwap$
+
+  tiraJmpCond "JL", argSrc$, "0", lblDone$
+  tiraJmpCond "JG", argSrc$, "3", lblDone$
+  tiraJmpCond "JL", argDest$, "0", lblDone$
+  tiraJmpCond "JG", argDest$, "3", lblDone$
+
+  ' Page 0 and page 1 use the fixed framebuffer that the window procedure stretches
+  ' Normalize a larger full-screen destination so the complete source reaches that framebuffer
+  keepDestRect$ = tiraLabelCreateNew$("PUTIMG_KEEP_DEST")
+  normalizeDest$ = tiraLabelCreateNew$("PUTIMG_NORMALIZE_DEST")
+
+  tiraJmpCond "JG", argDest$, "1", keepDestRect$
+  tiraJmpCond "JNE", destX1$, "0", keepDestRect$
+  tiraJmpCond "JNE", destY1$, "0", keepDestRect$
+
+  requestedW$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_SUB, requestedW$, destX2$, destX1$
+  tiraOp TC_ADD, requestedW$, requestedW$, "1"
+
+  requestedH$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_SUB, requestedH$, destY2$, destY1$
+  tiraOp TC_ADD, requestedH$, requestedH$, "1"
+
+  tiraJmpCond "JG", requestedW$, LTRIM$(STR$(gfxConfig.SizeX)), normalizeDest$
+  tiraJmpCond "JG", requestedH$, LTRIM$(STR$(gfxConfig.SizeY)), normalizeDest$
+  tiraJmp keepDestRect$
+
+  tiraLabel normalizeDest$
+  tiraAssign destX2$, LTRIM$(STR$(gfxConfig.SizeX - 1))
+  tiraAssign destY2$, LTRIM$(STR$(gfxConfig.SizeY - 1))
+
+  tiraLabel keepDestRect$
+
+  dstW$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_SUB, dstW$, destX2$, destX1$
+  tiraOp TC_ADD, dstW$, dstW$, "1"
+
+  dstH$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_SUB, dstH$, destY2$, destY1$
+  tiraOp TC_ADD, dstH$, dstH$, "1"
+
+  tiraJmpCond "JLE", dstW$, "0", lblDone$
+  tiraJmpCond "JLE", dstH$, "0", lblDone$
+
+  lblSrc0$ = tiraLabelCreateNew$("SRC_0")
+  lblSrc1$ = tiraLabelCreateNew$("SRC_1")
+  lblSrc2$ = tiraLabelCreateNew$("SRC_2")
+  lblSrc3$ = tiraLabelCreateNew$("SRC_3")
+  lblSrcEnd$ = tiraLabelCreateNew$("SRC_END")
+
+  ptrSrcFb$ = tiraDimVar$("T", TYPE_INTEGER64)
+
+  tiraJmpCond "JE", argSrc$, "0", lblSrc0$
+  tiraJmpCond "JE", argSrc$, "1", lblSrc1$
+  tiraJmpCond "JE", argSrc$, "2", lblSrc2$
+  tiraJmpCond "JE", argSrc$, "3", lblSrc3$
+  tiraJmp lblDone$
+
+  tiraLabel lblSrc0$
+  tiraAssign ptrSrcFb$, "!G_GFX_PTR_FRMB_BACK"
+  tiraJmp lblSrcEnd$
+
+  tiraLabel lblSrc1$
+  tiraAssign ptrSrcFb$, "!G_GFX_PTR_FRMB_FRONT"
+  tiraJmp lblSrcEnd$
+
+  tiraLabel lblSrc2$
+  tiraAssign ptrSrcFb$, "!G_GFX_PTR_FRMB_PAGE2"
+  tiraJmp lblSrcEnd$
+
+  tiraLabel lblSrc3$
+  tiraAssign ptrSrcFb$, "!G_GFX_PTR_FRMB_PAGE3"
+
+  tiraLabel lblSrcEnd$
+
+  lblDest0$ = tiraLabelCreateNew$("DEST_0")
+  lblDest1$ = tiraLabelCreateNew$("DEST_1")
+  lblDest2$ = tiraLabelCreateNew$("DEST_2")
+  lblDest3$ = tiraLabelCreateNew$("DEST_3")
+  lblDestEnd$ = tiraLabelCreateNew$("DEST_END")
+
+  ptrDestFb$ = tiraDimVar$("T", TYPE_INTEGER64)
+
+  tiraJmpCond "JE", argDest$, "0", lblDest0$
+  tiraJmpCond "JE", argDest$, "1", lblDest1$
+  tiraJmpCond "JE", argDest$, "2", lblDest2$
+  tiraJmpCond "JE", argDest$, "3", lblDest3$
+  tiraJmp lblDone$
+
+  tiraLabel lblDest0$
+  tiraAssign ptrDestFb$, "!G_GFX_PTR_FRMB_BACK"
+  tiraJmp lblDestEnd$
+
+  tiraLabel lblDest1$
+  tiraAssign ptrDestFb$, "!G_GFX_PTR_FRMB_FRONT"
+  tiraJmp lblDestEnd$
+
+  tiraLabel lblDest2$
+  tiraAssign ptrDestFb$, "!G_GFX_PTR_FRMB_PAGE2"
+  tiraJmp lblDestEnd$
+
+  tiraLabel lblDest3$
+  tiraAssign ptrDestFb$, "!G_GFX_PTR_FRMB_PAGE3"
+
+  tiraLabel lblDestEnd$
+
+  srcW$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign srcW$, LTRIM$(STR$(gfxConfig.SizeX))
+
+  srcH$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign srcH$, LTRIM$(STR$(gfxConfig.SizeY))
+
+  ' Page 2 retains the dimensions supplied to _NEWIMAGE
+  srcDimsDone$ = tiraLabelCreateNew$("PUTIMG_SRC_DIMS_DONE")
+  tiraJmpCond "JNE", argSrc$, "2", srcDimsDone$
+  tiraJmpCond "JLE", "!G_GFX_V32_PAGE2W", "0", srcDimsDone$
+  tiraJmpCond "JLE", "!G_GFX_V32_PAGE2H", "0", srcDimsDone$
+  tiraJmpCond "JG", "!G_GFX_V32_PAGE2W", LTRIM$(STR$(gfxConfig.SizeX)), srcDimsDone$
+  tiraJmpCond "JG", "!G_GFX_V32_PAGE2H", LTRIM$(STR$(gfxConfig.SizeY)), srcDimsDone$
+
+  tiraAssign srcW$, "!G_GFX_V32_PAGE2W"
+  tiraAssign srcH$, "!G_GFX_V32_PAGE2H"
+
+  tiraLabel srcDimsDone$
+
+  ' When source and destination share a framebuffer, preserve the complete source before drawing
+  sourceCopyDone$ = tiraLabelCreateNew$("PUTIMG_SOURCE_COPY_DONE")
+  tiraJmpCond "JNE", ptrSrcFb$, ptrDestFb$, sourceCopyDone$
+
+  sourceCopySize$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign sourceCopySize$, LTRIM$(STR$(gfxConfig.SizeX * gfxConfig.SizeY))
+
+  sourceCopyPtr$ = tiraAllocTempMem$(sourceCopySize$)
+  tiraMemcpy sourceCopyPtr$, ptrSrcFb$, sourceCopySize$
+  tiraAssign ptrSrcFb$, sourceCopyPtr$
+
+  tiraLabel sourceCopyDone$
+
+  srcW_minus_1$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_SUB, srcW_minus_1$, srcW$, "1"
+
+  srcH_minus_1$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_SUB, srcH_minus_1$, srcH$, "1"
+
+  yItr$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign yItr$, "0"
+
+  lblLoopY$ = tiraLabelCreateNew$("PUTIMG_LOOPY")
+  lblDoneY$ = tiraLabelCreateNew$("PUTIMG_DONEY")
+
+  tiraLabel lblLoopY$
+  tiraJmpCond "JGE", yItr$, dstH$, lblDoneY$
+
+  absY$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_ADD, absY$, destY1$, yItr$
+
+  skipRow$ = tiraLabelCreateNew$("PUTIMG_SKIPROW")
+  tiraJmpCond "JL", absY$, "0", skipRow$
+  tiraJmpCond "JGE", absY$, LTRIM$(STR$(gfxConfig.SizeY)), skipRow$
+
+  srcY$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_MUL, srcY$, yItr$, srcH$
+  tiraOp TC_IDIV, srcY$, srcY$, dstH$
+  tiraClamp srcY$, "0", srcH_minus_1$
+
+  srcRowOffset$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_MUL, srcRowOffset$, srcY$, LTRIM$(STR$(gfxConfig.SizeX))
+
+  dstRowOffset$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_MUL, dstRowOffset$, absY$, LTRIM$(STR$(gfxConfig.SizeX))
+
+  xItr$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign xItr$, "0"
+
+  lblLoopX$ = tiraLabelCreateNew$("PUTIMG_LOOPX")
+  lblDoneX$ = tiraLabelCreateNew$("PUTIMG_DONEX")
+
+  tiraLabel lblLoopX$
+  tiraJmpCond "JGE", xItr$, dstW$, lblDoneX$
+
+  absX$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_ADD, absX$, destX1$, xItr$
+
+  skipPix$ = tiraLabelCreateNew$("PUTIMG_SKIPPIX")
+  tiraJmpCond "JL", absX$, "0", skipPix$
+  tiraJmpCond "JGE", absX$, LTRIM$(STR$(gfxConfig.SizeX)), skipPix$
+
+  srcX$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_MUL, srcX$, xItr$, srcW$
+  tiraOp TC_IDIV, srcX$, srcX$, dstW$
+  tiraClamp srcX$, "0", srcW_minus_1$
+
+  srcOffset$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_ADD, srcOffset$, srcRowOffset$, srcX$
+
+  srcAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, srcAddr$, ptrSrcFb$, srcOffset$
+
+  pixel$ = tiraDimVar$("T", TYPE_UBYTE)
+  tiraNew TC_READ_MEM, pixel$ + ", " + srcAddr$
+
+  tiraJmpCond "JE", pixel$, "0", skipPix$
+
+  dstOffset$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_ADD, dstOffset$, dstRowOffset$, absX$
+
+  dstAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, dstAddr$, ptrDestFb$, dstOffset$
+
+  tiraWriteMem dstAddr$, pixel$, "1"
+
+  tiraLabel skipPix$
+
+  tiraOp TC_ADD, xItr$, xItr$, "1"
+  tiraJmp lblLoopX$
+
+  tiraLabel lblDoneX$
+  tiraLabel skipRow$
+
+  tiraOp TC_ADD, yItr$, yItr$, "1"
+  tiraJmp lblLoopY$
+
+  tiraLabel lblDoneY$
+
+  tiraLabel lblDone$
+
+  tiraAssign "!G_MEM_PTR_TEMP_HEAP", heapMark$
+
+  tiraRT_Epilogue
+  tira_EndAndProcess
+
+END SUB ' emitRuntimePutImage
+
+''''''''''''''''''''''''
+SUB emitRuntimeRead
+
+  rtOffset(RT_READ) = stream.emitPos
+
+  tira_Start
+  tiraRT_Prologue
+
+  targetAddrVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_ABI_READ_ARG, targetAddrVar$ + ", 1"
+
+  isStrVarVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, isStrVarVar$ + ", 2"
+
+  tgtDataTypeVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_ABI_READ_ARG, tgtDataTypeVar$ + ", 3"
+
+  skipErrLbl$ = tiraLabelCreateNew$("READ_SKIP_ERR")
+  tiraJmpCond "JL", "!G_SYS_VAL_DATAINDEX", "!G_SYS_VAL_DATA_COUNT", skipErrLbl$
+
+  errStr$ = CHR$(34) + "OUT OF DATA ERROR ON READ" + CHR$(34)
+  tiraCall "RT_PRINT_STR", 1, errStr$
+  tiraCall "RT_CRLF", 0, ""
+  tiraJmp "@END_PROGRAM"
+
+  tiraLabel skipErrLbl$
+
+  baseArr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADDRESS_OF, baseArr$, "!G_SYS_ARR_DATA_LIST", ""
+
+  descPtrAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraLeaSIB descPtrAddr$, baseArr$, "!G_SYS_VAL_DATAINDEX", "8"
+
+  descPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_READ_MEM, descPtr$ + ", " + descPtrAddr$
+
+  tiraOp TC_ADD, "!G_SYS_VAL_DATAINDEX", "!G_SYS_VAL_DATAINDEX", "1"
+
+  notStrLbl$ = tiraLabelCreateNew$("READ_NOT_STR")
+  tiraJmpCond "JE", isStrVarVar$, "0", notStrLbl$
+
+  tiraCall "RT_STR_ASSIGN", 2, targetAddrVar$ + ", " + descPtr$
+
+  endReadLbl$ = tiraLabelCreateNew$("READ_END")
+  tiraJmp endReadLbl$
+
+  tiraLabel notStrLbl$
+
+  bufPtr$ = tiraGetStringData$(descPtr$)
+  bufLen$ = tiraGetStringLen$(descPtr$)
+
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign resVar$, "0"
+  isNeg$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign isNeg$, "0"
+
+  skipLoop$ = tiraLabelCreateNew$("READ_NSKIP")
+  skipDone$ = tiraLabelCreateNew$("READ_NSKIP_DN")
+
+  tiraLabel skipLoop$
+  tiraJmpCond "JLE", bufLen$, "0", skipDone$
+  byteVal$ = tiraDimVar$("T", TYPE_UBYTE)
+  tiraNew TC_READ_MEM, byteVal$ + ", " + bufPtr$
+
+  isSpcLbl$ = tiraLabelCreateNew$("READ_ISSPC")
+  tiraJmpCond "JE", byteVal$, "32", isSpcLbl$
+  tiraJmpCond "JE", byteVal$, "13", isSpcLbl$
+  tiraJmpCond "JE", byteVal$, "10", isSpcLbl$
+  tiraJmp skipDone$
+
+  tiraLabel isSpcLbl$
+  tiraOp TC_ADD, bufPtr$, bufPtr$, "1"
+  tiraOp TC_SUB, bufLen$, bufLen$, "1"
+  tiraJmp skipLoop$
+
+  tiraLabel skipDone$
+
+  signDone$ = tiraLabelCreateNew$("READ_SGN_DONE")
+  tiraJmpCond "JLE", bufLen$, "0", signDone$
+  tiraNew TC_READ_MEM, byteVal$ + ", " + bufPtr$
+  tiraJmpCond "JNE", byteVal$, "45", signDone$
+  tiraAssign isNeg$, "1"
+  tiraOp TC_ADD, bufPtr$, bufPtr$, "1"
+  tiraOp TC_SUB, bufLen$, bufLen$, "1"
+
+  tiraLabel signDone$
+
+  numLoopTop$ = tiraLabelCreateNew$("READ_NUM_LOOP")
+  numLoopDone$ = tiraLabelCreateNew$("READ_NUM_DONE")
+
+  tiraLabel numLoopTop$
+  tiraJmpCond "JLE", bufLen$, "0", numLoopDone$
+  tiraNew TC_READ_MEM, byteVal$ + ", " + bufPtr$
+
+  tiraJmpCond "JL", byteVal$, "48", numLoopDone$
+  tiraJmpCond "JG", byteVal$, "57", numLoopDone$
+
+  tiraOp TC_SUB, byteVal$, byteVal$, "48"
+  tiraOp TC_MUL, resVar$, resVar$, "10"
+  tiraOp TC_ADD, resVar$, resVar$, byteVal$
+
+  tiraOp TC_ADD, bufPtr$, bufPtr$, "1"
+  tiraOp TC_SUB, bufLen$, bufLen$, "1"
+  tiraJmp numLoopTop$
+
+  tiraLabel numLoopDone$
+
+  applySignDone$ = tiraLabelCreateNew$("READ_SGN_APP")
+  tiraJmpCond "JE", isNeg$, "0", applySignDone$
+  tiraOp TC_NEG, resVar$, resVar$, ""
+  tiraLabel applySignDone$
+
+  lblSingle$ = tiraLabelCreateNew$("READ_IS_SNG")
+  lblDouble$ = tiraLabelCreateNew$("READ_IS_DBL")
+  lblByte$ = tiraLabelCreateNew$("READ_IS_BYT")
+  lblInt$ = tiraLabelCreateNew$("READ_IS_INT")
+  lblLong$ = tiraLabelCreateNew$("READ_IS_LNG")
+  lblWriteDone$ = tiraLabelCreateNew$("READ_WR_DONE")
+
+  tiraJmpCond "JE", tgtDataTypeVar$, LTRIM$(STR$(TYPE_SINGLE)), lblSingle$
+  tiraJmpCond "JE", tgtDataTypeVar$, LTRIM$(STR$(TYPE_DOUBLE)), lblDouble$
+  tiraJmpCond "JE", tgtDataTypeVar$, LTRIM$(STR$(TYPE_BYTE)), lblByte$
+  tiraJmpCond "JE", tgtDataTypeVar$, LTRIM$(STR$(TYPE_UBYTE)), lblByte$
+  tiraJmpCond "JE", tgtDataTypeVar$, LTRIM$(STR$(TYPE_INTEGER)), lblInt$
+  tiraJmpCond "JE", tgtDataTypeVar$, LTRIM$(STR$(TYPE_UINTEGER)), lblInt$
+  tiraJmpCond "JE", tgtDataTypeVar$, LTRIM$(STR$(TYPE_LONG)), lblLong$
+  tiraJmpCond "JE", tgtDataTypeVar$, LTRIM$(STR$(TYPE_ULONG)), lblLong$
+
+  tiraWriteMem targetAddrVar$, resVar$, "8"
+  tiraJmp lblWriteDone$
+
+  tiraLabel lblSingle$
+  tiraWriteMem targetAddrVar$, resVar$, "SINGLE"
+  tiraJmp lblWriteDone$
+
+  tiraLabel lblDouble$
+  tiraWriteMem targetAddrVar$, resVar$, "DOUBLE"
+  tiraJmp lblWriteDone$
+
+  tiraLabel lblByte$
+  tiraWriteMem targetAddrVar$, resVar$, "1"
+  tiraJmp lblWriteDone$
+
+  tiraLabel lblInt$
+  tiraWriteMem targetAddrVar$, resVar$, "2"
+  tiraJmp lblWriteDone$
+
+  tiraLabel lblLong$
+  tiraWriteMem targetAddrVar$, resVar$, "4"
+
+  tiraLabel lblWriteDone$
+
+  tiraLabel endReadLbl$
+
+  tiraRT_Epilogue
+
+  tira_EndAndProcess
+
+END SUB ' emitRuntimeRead
+
+''''''''''''''''''''''''
+SUB emitRuntimeVehHandler
+
+  '''' RT_VEH_HANDLER
+  rtOffset(RT_VEH_HANDLER) = stream.emitPos
+
+  tira_Start
+  tiraRT_Prologue
+
+  arg1Var$ = tiraDimVar$("ARG1", TYPE_INTEGER64)
+  tiraNew TC_ABI_READ_ARG, arg1Var$ + ", 1"
+
+  tiraCall "IAT_GETCURRENTTHREADID", 0, ""
+  curThread$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_GET_RET, curThread$
+
+  lblWrongThread$ = tiraLabelCreateNew$("VEH_WRONG_THREAD")
+  tiraJmpCond "JNE", curThread$, "!G_SYS_VAL_USER_THREAD_ID", lblWrongThread$
+
+  excPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign excPtr$, arg1Var$
+
+  ' Read ExceptionRecord pointer (offset 0)
+  excRecPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_READ_MEM, excRecPtr$ + ", " + excPtr$
+
+  ' Read ExceptionCode from the ExceptionRecord structure
+  excCode$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_READ_MEM, excCode$ + ", " + excRecPtr$
+
+  lblMatchDivZero$ = tiraLabelCreateNew$("VEH_MATCH_DZ")
+  lblMatchAccess$ = tiraLabelCreateNew$("VEH_MATCH_AV")
+  lblMatchStack$ = tiraLabelCreateNew$("VEH_MATCH_SO")
+  lblPrepareRestore$ = tiraLabelCreateNew$("VEH_PREP_RESTORE")
+  lblEnd$ = tiraLabelCreateNew$("VEH_END")
+
+  targetRip$ = tiraDimVar$("T", TYPE_INTEGER64)
+
+  ' Check for integer divide by zero (0xC0000094 -> -1073741676)
+  tiraJmpCond "JE", excCode$, "-1073741676", lblMatchDivZero$
+
+  ' Check for float divide by zero (0xC000008E -> -1073741682)
+  tiraJmpCond "JE", excCode$, "-1073741682", lblMatchDivZero$
+
+  ' Check for Access Violation (0xC0000005 -> -1073741819)
+  tiraJmpCond "JE", excCode$, "-1073741819", lblMatchAccess$
+
+  ' Check for Stack Overflow (0xC00000FD -> -1073741571)
+  tiraJmpCond "JE", excCode$, "-1073741571", lblMatchStack$
+
+  ' Not a recognized exception, gracefully pass it back to Windows returning EXCEPTION_CONTINUE_SEARCH (0) in RAX
+  tiraAssign arg1Var$, "0"
+  tiraJmp lblEnd$
+
+  tiraLabel lblMatchDivZero$
+  tiraOp TC_ADDRESS_OF, targetRip$, "@NATIVE_DIV_ZERO_HANDLER", ""
+  tiraJmp lblPrepareRestore$
+
+  tiraLabel lblMatchAccess$
+  tiraOp TC_ADDRESS_OF, targetRip$, "@NATIVE_MEM_ACCESS_HANDLER", ""
+  tiraJmp lblPrepareRestore$
+
+  tiraLabel lblMatchStack$
+  tiraOp TC_ADDRESS_OF, targetRip$, "@NATIVE_STACK_HANDLER", ""
+  tiraJmp lblPrepareRestore$
+
+  tiraLabel lblPrepareRestore$
+
+  ' Check for user handler override
+  userHandler$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraAssign userHandler$, "!G_ERR_PTR_HANDLER"
+  lblHasHandler$ = tiraLabelCreateNew$("VEH_HAS_HDL")
+  tiraJmpCond "JE", userHandler$, "0", lblHasHandler$
+  tiraAssign targetRip$, userHandler$
+  tiraLabel lblHasHandler$
+
+  ' Start modifying the CPU CONTEXT struct to safely route execution into our basic program space by reading ContextRecord pointer (offset 8)
+  ctxPtrAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, ctxPtrAddr$, excPtr$, "8"
+
+  ctxPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_READ_MEM, ctxPtr$ + ", " + ctxPtrAddr$
+
+  ' Navigate to Context.Rsp to reset the dirty execution stack (offset 152)
+  rspPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, rspPtr$, ctxPtr$, "152"
+  tiraWriteMem rspPtr$, "!G_SYS_PTR_SAFE_RSP", "8"
+
+  ' Write it into Context.Rbp to pull the base pointer out of any deep subroutine frames (offset 160)
+  rbpPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, rbpPtr$, ctxPtr$, "160"
+  tiraWriteMem rbpPtr$, "!G_SYS_PTR_SAFE_RSP", "8"
+
+  ' Redirect the instruction pointer (offset 248)
+  ripPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraOp TC_ADD, ripPtr$, ctxPtr$, "248"
+
+  ' Save the crashing instruction address for the RESUME keyword
+  crashRip$ = tiraDimVar$("T", TYPE_INTEGER64)
+  tiraNew TC_READ_MEM, crashRip$ + ", " + ripPtr$
+  tiraAssign "!G_ERR_PTR_LAST", crashRip$
+
+  ' Write the target address into Context.Rip
+  tiraWriteMem ripPtr$, targetRip$, "8"
+
+  ' Return EXCEPTION_CONTINUE_EXECUTION (-1) so Windows allows the thread to seamlessly continue
+  tiraAssign arg1Var$, "-1"
+  tiraJmp lblEnd$
+
+  tiraLabel lblWrongThread$
+  tiraAssign arg1Var$, "0"
+
+  tiraLabel lblEnd$
+
+  tiraNew TC_ABI_WRITE_RET, arg1Var$
+  tiraRT_Epilogue
+
+  '''' Append the native error handler to the compiled output space immediately following the VEH handler
+
+  tiraLabel "@NATIVE_DIV_ZERO_HANDLER"
+  tiraFatalError "UNHANDLED DIVISION BY ZERO"
+
+  tiraLabel "@NATIVE_BOUNDS_HANDLER"
+  tiraFatalError "ARRAY OUT OF BOUNDS"
+
+  tiraLabel "@NATIVE_MEM_ACCESS_HANDLER"
+  tiraFatalError "MEMORY ACCESS VIOLATION"
+
+  tiraLabel "@NATIVE_STACK_HANDLER"
+  tiraFatalError "STACK CORRUPTION DETECTED"
+
+  tira_EndAndProcess
+
+END SUB ' emitRuntimeVehHandler
+
+''''''''''''''''''''''''
+''''''''''''''''''''''''
+SUB initKeyMapping
+
+  keyMappingCount = 0
+
+  ' Uppercase A-Z
+  FOR ii = 65 TO 90
+    keyMapping(keyMappingCount).qbCode = ii
+    keyMapping(keyMappingCount).vkCode = ii
+    keyMappingCount = keyMappingCount + 1
+  NEXT
+
+  ' Lowercase a-z
+  FOR ii = 97 TO 122
+    keyMapping(keyMappingCount).qbCode = ii
+    keyMapping(keyMappingCount).vkCode = ii - 32
+    keyMappingCount = keyMappingCount + 1
+  NEXT
+
+  ' Numbers 0-9
+  FOR ii = 48 TO 57
+    keyMapping(keyMappingCount).qbCode = ii
+    keyMapping(keyMappingCount).vkCode = ii
+    keyMappingCount = keyMappingCount + 1
+  NEXT
+
+  ' Arrow Keys
+  keyMapping(keyMappingCount).qbCode = 18432
+  keyMapping(keyMappingCount).vkCode = 38
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 19200
+  keyMapping(keyMappingCount).vkCode = 37
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 19712
+  keyMapping(keyMappingCount).vkCode = 39
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 20480
+  keyMapping(keyMappingCount).vkCode = 40
+  keyMappingCount = keyMappingCount + 1
+
+  ' Navigation Keys
+  keyMapping(keyMappingCount).qbCode = 18688
+  keyMapping(keyMappingCount).vkCode = 33
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 20736
+  keyMapping(keyMappingCount).vkCode = 34
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 18176
+  keyMapping(keyMappingCount).vkCode = 36
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 20224
+  keyMapping(keyMappingCount).vkCode = 35
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 20992
+  keyMapping(keyMappingCount).vkCode = 45
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 21248
+  keyMapping(keyMappingCount).vkCode = 46
+  keyMappingCount = keyMappingCount + 1
+
+  ' Control Keys
+  keyMapping(keyMappingCount).qbCode = 13
+  keyMapping(keyMappingCount).vkCode = 13
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 27
+  keyMapping(keyMappingCount).vkCode = 27
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 32
+  keyMapping(keyMappingCount).vkCode = 32
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 9
+  keyMapping(keyMappingCount).vkCode = 9
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 8
+  keyMapping(keyMappingCount).vkCode = 8
+  keyMappingCount = keyMappingCount + 1
+
+  ' Function Keys
+  keyMapping(keyMappingCount).qbCode = 15104
+  keyMapping(keyMappingCount).vkCode = 112
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 15360
+  keyMapping(keyMappingCount).vkCode = 113
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 15616
+  keyMapping(keyMappingCount).vkCode = 114
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 15872
+  keyMapping(keyMappingCount).vkCode = 115
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 16128
+  keyMapping(keyMappingCount).vkCode = 116
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 16384
+  keyMapping(keyMappingCount).vkCode = 117
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 16640
+  keyMapping(keyMappingCount).vkCode = 118
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 16896
+  keyMapping(keyMappingCount).vkCode = 119
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 17152
+  keyMapping(keyMappingCount).vkCode = 120
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 17408
+  keyMapping(keyMappingCount).vkCode = 121
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 34048
+  keyMapping(keyMappingCount).vkCode = 122
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 34304
+  keyMapping(keyMappingCount).vkCode = 123
+  keyMappingCount = keyMappingCount + 1
+
+  ' Symbol Keys
+  keyMapping(keyMappingCount).qbCode = 42
+  keyMapping(keyMappingCount).vkCode = 106
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 43
+  keyMapping(keyMappingCount).vkCode = 187
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 44
+  keyMapping(keyMappingCount).vkCode = 188
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 45
+  keyMapping(keyMappingCount).vkCode = 189
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 46
+  keyMapping(keyMappingCount).vkCode = 190
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 47
+  keyMapping(keyMappingCount).vkCode = 191
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 60
+  keyMapping(keyMappingCount).vkCode = 188
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 61
+  keyMapping(keyMappingCount).vkCode = 187
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 62
+  keyMapping(keyMappingCount).vkCode = 190
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 63
+  keyMapping(keyMappingCount).vkCode = 191
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 92
+  keyMapping(keyMappingCount).vkCode = 220
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 95
+  keyMapping(keyMappingCount).vkCode = 189
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 124
+  keyMapping(keyMappingCount).vkCode = 220
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 39
+  keyMapping(keyMappingCount).vkCode = 222
+  keyMappingCount = keyMappingCount + 1
+
+  keyMapping(keyMappingCount).qbCode = 34
+  keyMapping(keyMappingCount).vkCode = 222
+  keyMappingCount = keyMappingCount + 1
+
+END SUB ' initKeyMapping
+
+''''''''''''''''''''''''
 FUNCTION parse_ATN$ (startIdx, endIdx, allowImplicit)
 
   DIM arg1$
@@ -2287,6 +4747,63 @@ FUNCTION parse_CVS$ (startIdx, endIdx, allowImplicit)
 END FUNCTION ' parse_CVS$
 
 ''''''''''''''''''''''''
+''''''''''''''''''''''''
+FUNCTION parse_DELAY (startIdx)
+
+  DIM endIdx AS LONG
+  DIM argVar$
+  DIM argFloat$
+  DIM msFloat$
+  DIM msInt$
+  DIM skipClampLbl$
+
+  endIdx = lineTokenCount - 1
+
+  IF endIdx < startIdx + 1 THEN
+    throwCompilerError "_DELAY REQUIRES NUMERIC ARGUMENT", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+
+  argVar$ = tiraParseExpressionNumeric$(startIdx + 1, endIdx, ALIM, "_DELAY REQUIRES NUMERIC ARGUMENT")
+  IF argVar$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  argFloat$ = tiraDimVar$("T", TYPE_DOUBLE)
+
+  IF exprIs.DataType <> TYPE_DOUBLE THEN
+    tiraOp TC_CAST, argFloat$, argVar$, LTRIM$(STR$(TYPE_DOUBLE))
+  ELSE
+    tiraAssign argFloat$, argVar$
+  END IF
+
+  msFloat$ = tiraDimVar$("T", TYPE_DOUBLE)
+  tiraOp TC_MUL, msFloat$, argFloat$, "1000.0#"
+
+  msInt$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_CAST, msInt$, msFloat$, LTRIM$(STR$(TYPE_LONG))
+
+  skipClampLbl$ = tiraLabelCreateNew$("DELAY_SKIP_CLAMP")
+  tiraJmpCond "JGE", msInt$, "0", skipClampLbl$
+  tiraAssign msInt$, "0"
+  tiraLabel skipClampLbl$
+
+  tiraCall "IAT_SLEEP", 1, msInt$
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_DELAY = 1
+
+END FUNCTION ' parse_DELAY
+
+
+''''''''''''''''''''''''
 FUNCTION parse_DEVICE$ (startIdx, endIdx, allowImplicit)
 
   DIM arg1$
@@ -2659,6 +5176,125 @@ FUNCTION parse_FREEFILE$ (startIdx, endIdx, allowImplicit)
   parse_FREEFILE$ = scratchName$
 
 END FUNCTION ' parse_FREEFILE$
+
+''''''''''''''''''''''''
+FUNCTION parse_FREEIMAGE (startIdx)
+
+  DIM endIdx AS LONG
+  DIM handleVar$
+  DIM lblCheck2$
+  DIM lblCheck3$
+  DIM lblError$
+  DIM lblDone$
+  DIM fbClearSize$
+  DIM lblSkipDest$
+  DIM lblSkipSrc$
+  DIM endFreeLbl$
+
+  endIdx = lineTokenCount - 1
+
+  IF compileHasGraphics = 0 THEN
+    throwCompilerError "_FREEIMAGE REQUIRES #GRAPHICS", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF endIdx >= startIdx + 1 THEN
+    IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+    handleVar$ = tiraParseExpressionInt$(startIdx + 1, endIdx, ALIM, "HANDLE MUST BE NUMERIC")
+    IF handleVar$ = "" THEN
+      tira_Cancel
+      EXIT FUNCTION
+    END IF
+  ELSE
+    handleVar$ = tiraDimVar$("T", TYPE_LONG)
+    tiraAssign handleVar$, "!G_GFX_VAL_DEST_PAGE"
+  END IF
+
+  lblCheck2$ = tiraLabelCreateNew$("FREE_CHK2")
+  lblCheck3$ = tiraLabelCreateNew$("FREE_CHK3")
+  lblError$ = tiraLabelCreateNew$("FREE_ERR")
+  lblDone$ = tiraLabelCreateNew$("FREE_DONE")
+  endFreeLbl$ = tiraLabelCreateNew$("FREE_END")
+
+  tiraJmpCond "JE", handleVar$, "2", lblCheck2$
+  tiraJmpCond "JE", handleVar$, "3", lblCheck3$
+  tiraJmp lblError$
+
+  tiraLabel lblCheck2$
+  tiraAssign "!G_GFX_VAL_BUFR_COUNT_PAGE2", "0"
+  fbClearSize$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign fbClearSize$, LTRIM$(RTRIM$(STR$(gfxConfig.SizeX * gfxConfig.SizeY)))
+  tiraMemSet "!G_GFX_PTR_FRMB_PAGE2", "0", fbClearSize$
+  tiraJmp lblDone$
+
+  tiraLabel lblCheck3$
+  tiraAssign "!G_GFX_VAL_BUFR_COUNT_PAGE3", "0"
+  fbClearSize$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign fbClearSize$, LTRIM$(RTRIM$(STR$(gfxConfig.SizeX * gfxConfig.SizeY)))
+  tiraMemSet "!G_GFX_PTR_FRMB_PAGE3", "0", fbClearSize$
+
+  tiraLabel lblDone$
+
+  ' Reset DEST to 0 if it was the freed handle
+  lblSkipDest$ = tiraLabelCreateNew$("FREE_SKIP_DEST")
+  tiraJmpCond "JNE", "!G_GFX_VAL_DEST_PAGE", handleVar$, lblSkipDest$
+  tiraAssign "!G_GFX_VAL_DEST_PAGE", "0"
+  tiraAssign "!G_GFX_PTR_DEST_FRMB", "!G_GFX_PTR_FRMB_BACK"
+  tiraAssign "!G_GFX_PTR_DEST_BUFR", "!G_GFX_PTR_BUFR_BACK"
+  tiraOp TC_ADDRESS_OF, "!G_GFX_PTR_DEST_CNT", "!G_GFX_VAL_BUFR_COUNT_BACK", ""
+  tiraLabel lblSkipDest$
+
+  ' Reset SOURCE to 0 if it was the freed handle
+  lblSkipSrc$ = tiraLabelCreateNew$("FREE_SKIP_SRC")
+  tiraJmpCond "JNE", "!G_GFX_VAL_SRC_PAGE", handleVar$, lblSkipSrc$
+  tiraAssign "!G_GFX_VAL_SRC_PAGE", "0"
+  tiraAssign "!G_GFX_PTR_SRC_FRMB", "!G_GFX_PTR_FRMB_BACK"
+  tiraAssign "!G_GFX_PTR_SRC_BUFR", "!G_GFX_PTR_BUFR_BACK"
+  tiraOp TC_ADDRESS_OF, "!G_GFX_PTR_SRC_CNT", "!G_GFX_VAL_BUFR_COUNT_BACK", ""
+  tiraLabel lblSkipSrc$
+
+  tiraJmp endFreeLbl$
+
+  tiraLabel lblError$
+  tiraFatalError "ILLEGAL FUNCTION CALL IN _FREEIMAGE"
+
+  tiraLabel endFreeLbl$
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_FREEIMAGE = 1
+
+END FUNCTION ' parse_FREEIMAGE
+
+''''''''''''''''''''''''
+FUNCTION parse_FULLSCREEN (startIdx)
+
+  DIM endIdx AS LONG
+
+  endIdx = lineTokenCount - 1
+
+  IF compileHasGraphics = 0 THEN
+    throwCompilerError "_FULLSCREEN REQUIRES #GRAPHICS", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  ' Any extra tokens (such as _SQUAREPIXELS) are gracefully ignored here to prevent
+  ' breaking compilation when importing code designed for standard QB64.
+
+  tira_Start
+
+  tiraCall "RT_FULLSCREEN", 0, ""
+  tiraTriggerAutoDisplay
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_FULLSCREEN = 1
+
+END FUNCTION ' parse_FULLSCREEN
 
 ''''''''''''''''''''''''
 FUNCTION parse_GET (startIdx)
@@ -3173,6 +5809,65 @@ FUNCTION parse_HEX$ (startIdx, endIdx, allowImplicit)
 END FUNCTION ' parse_HEX$
 
 ''''''''''''''''''''''''
+FUNCTION parse_HEIGHT$ (startIdx, endIdx, allowImplicit)
+
+  DIM arg1$
+  DIM scratchName$
+  DIM resVar$
+  DIM resHeight AS LONG
+
+  IF lineTokenVals(startIdx + 1) = 256 + ASC("(") AND lineTokenVals(endIdx) = 256 + ASC(")") THEN
+    IF startIdx + 3 > endIdx THEN
+      throwCompilerError "MALFORMED _HEIGHT", ASIS, 0
+      parse_HEIGHT$ = ""
+      EXIT FUNCTION
+    END IF
+  ELSE
+    IF startIdx <> endIdx THEN
+      throwCompilerError "MALFORMED _HEIGHT", ASIS, 0
+      parse_HEIGHT$ = ""
+      EXIT FUNCTION
+    END IF
+  END IF
+
+  tira_Start
+
+  IF startIdx <> endIdx THEN
+    IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+    arg1$ = tiraParseExpressionInt$(startIdx + 2, endIdx - 1, allowImplicit, "HANDLE MUST BE NUMERIC")
+    IF arg1$ = "" THEN
+      tira_Cancel
+      parse_HEIGHT$ = ""
+      EXIT FUNCTION
+    END IF
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("HEIGHT", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_HEIGHT$ = ""
+    EXIT FUNCTION
+  END IF
+
+  ff = resolveSymbol(scratchName$)
+  IF ff = 1 THEN symbols(returnedData2).DataType = TYPE_LONG
+
+  resHeight = 25
+  IF compileHasGraphics = 1 THEN resHeight = gfxConfig.SizeY
+
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign resVar$, LTRIM$(STR$(resHeight))
+
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_HEIGHT$ = scratchName$
+
+END FUNCTION ' parse_HEIGHT$
+
+''''''''''''''''''''''''
 FUNCTION parse_INSTR$ (startIdx, endIdx, allowImplicit)
 
   DIM comma1 AS LONG
@@ -3595,63 +6290,6 @@ FUNCTION parse_KILL (startIdx)
   parse_KILL = 1
 
 END FUNCTION ' parse_KILL
-
-''''''''''''''''''''''''
-FUNCTION parse_LBOUND$ (startIdx, endIdx, allowImplicit)
-
-  DIM arrNameTok$
-  DIM comma1 AS LONG
-  DIM vIdx AS LONG
-  DIM scratchName$
-  DIM dimVar$
-
-  IF checkIntrinsicSyntax(startIdx, endIdx, "LBOUND", 3) = 0 THEN
-    parse_LBOUND$ = ""
-    EXIT FUNCTION
-  END IF
-
-  comma1 = findComma(startIdx + 2, endIdx - 1)
-
-  arrNameTok$ = UCASE$(retTokenText$(lineTokens$(startIdx + 2)))
-  ff = resolveSymbol(arrNameTok$)
-  IF ff = 0 THEN
-    parse_LBOUND$ = ""
-    EXIT FUNCTION
-  END IF
-  vIdx = returnedData2
-
-  IF symbols(vIdx).IsArray = 0 THEN
-    throwCompilerError "LBOUND REQUIRES AN ARRAY", ASIS, 0
-    parse_LBOUND$ = ""
-    EXIT FUNCTION
-  END IF
-
-  tira_Start
-
-  IF comma1 > 0 THEN
-    dimVar$ = tiraParseExpressionInt$(comma1 + 1, endIdx - 1, allowImplicit, "DIMENSION MUST BE NUMERIC")
-    IF dimVar$ = "" THEN
-      tira_Cancel
-      parse_LBOUND$ = ""
-      EXIT FUNCTION
-    END IF
-  END IF
-
-  scratchName$ = tiraResolveHoistVar$("LBOUND", "_VAL")
-  IF scratchName$ = "" THEN
-    parse_LBOUND$ = ""
-    EXIT FUNCTION
-  END IF
-
-  tiraAssign scratchName$, "0"
-
-  tira_EndAndProcess
-
-  exprIs.DataType = TYPE_LONG
-  exprIs.IsTemp = 1
-  parse_LBOUND$ = scratchName$
-
-END FUNCTION ' parse_LBOUND$
 
 ''''''''''''''''''''''''
 FUNCTION parse_LOF$ (startIdx, endIdx, allowImplicit)
@@ -4312,6 +6950,229 @@ FUNCTION parse_MOUSEWHEEL$ (startIdx, endIdx, allowImplicit)
   parse_MOUSEWHEEL$ = scratchName$
 
 END FUNCTION ' parse_MOUSEWHEEL$
+
+''''''''''''''''''''''''
+FUNCTION parse_OFFSET$ (startIdx, endIdx, allowImplicit)
+
+  DIM scratchName$
+  DIM resVar$
+  DIM tokIdx AS LONG
+  DIM vTokVal AS LONG
+  DIM vTok$
+  DIM vName$
+  DIM hasIndex AS LONG
+  DIM parenStartIdx AS LONG
+  DIM closeParenIdx AS LONG
+  DIM hasField AS LONG
+  DIM udtFieldCount AS LONG
+  DIM udtFieldNames$(256)
+  DIM iDot AS LONG
+  DIM vIdx AS LONG
+  DIM targetType AS LONG
+  DIM tempUdtIndex AS LONG
+  DIM udtOffset AS LONG
+  DIM tempIsDynamicString AS LONG
+  DIM uIdx AS LONG
+  DIM fieldFound AS LONG
+  DIM iField AS LONG
+  DIM indicesStr$
+  DIM numParsedIndices AS LONG
+  DIM addrVar$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "_OFFSET", 3) = 0 THEN
+    parse_OFFSET$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  tokIdx = startIdx + 2
+
+  vTok$ = lineTokens$(tokIdx)
+  vTokVal = lineTokenVals(tokIdx)
+
+  IF vTokVal <> 0 OR LEN(vTok$) = 0 THEN
+    throwCompilerErrorAndCancelTira "EXPECTED VARIABLE AFTER _OFFSET", ASIS, 0
+    parse_OFFSET$ = ""
+    EXIT FUNCTION
+  END IF
+
+  vName$ = UCASE$(vTok$)
+  tokIdx = tokIdx + 1
+
+  ' Support dot variable syntax gracefully to map cleanly with older structural integrations
+  DO WHILE tokIdx <= endIdx - 1
+    IF lineTokenVals(tokIdx) = 256 + ASC(".") THEN
+      IF findSymbol(vName$) THEN
+        IF symbols(returnedData2).DataType = TYPE_UDT THEN EXIT DO
+      END IF
+      IF compileClassicMode = 1 THEN
+        IF tokIdx + 1 <= endIdx - 1 THEN
+          vName$ = vName$ + "." + UCASE$(lineTokens$(tokIdx + 1))
+          tokIdx = tokIdx + 2
+        ELSE
+          EXIT DO
+        END IF
+      ELSE
+        throwCompilerErrorAndCancelTira "'.' ONLY ALLOWED ON UDT VARIABLES", ASIS, 0
+        addStatusMsg "USE #CLASSIC DIRECTIVE FOR DOTS IN VARIABLE NAMES"
+        parse_OFFSET$ = ""
+        EXIT FUNCTION
+      END IF
+    ELSE
+      EXIT DO
+    END IF
+  LOOP
+
+  hasIndex = 0
+  IF tokIdx <= endIdx - 1 THEN
+    IF lineTokenVals(tokIdx) = 256 + ASC("(") THEN
+      hasIndex = 1
+      parenStartIdx = tokIdx
+      ff = findMatchingParen(tokIdx, endIdx - 1)
+      IF ff = 1 THEN
+        closeParenIdx = returnedData2
+      ELSE
+        throwCompilerErrorAndCancelTira "UNMATCHED PARENTHESIS IN _OFFSET", ASIS, 0
+        parse_OFFSET$ = ""
+        EXIT FUNCTION
+      END IF
+      tokIdx = closeParenIdx + 1
+    END IF
+  END IF
+
+  udtFieldCount = 0
+  hasField = 0
+  DO WHILE tokIdx <= endIdx - 1
+    IF lineTokenVals(tokIdx) = 256 + ASC(".") THEN
+      hasField = 1
+      udtFieldNames$(udtFieldCount) = UCASE$(lineTokens$(tokIdx + 1))
+      udtFieldCount = udtFieldCount + 1
+      IF udtFieldCount >= 256 THEN
+        throwCompilerErrorAndCancelTira "UDT FIELD DEPTH EXCEEDED", ASIS, 0
+        parse_OFFSET$ = ""
+        EXIT FUNCTION
+      END IF
+      tokIdx = tokIdx + 2
+    ELSE
+      EXIT DO
+    END IF
+  LOOP
+
+  IF tokIdx <= endIdx - 1 THEN
+    throwCompilerErrorAndCancelTira "UNEXPECTED TOKEN IN _OFFSET", ASIS, 0
+    parse_OFFSET$ = ""
+    EXIT FUNCTION
+  END IF
+
+  ff = resolveSymbol(vName$)
+  IF ff = 0 THEN
+    tira_Cancel
+    parse_OFFSET$ = ""
+    EXIT FUNCTION
+  END IF
+  vIdx = returnedData2
+  targetType = returnedData3
+
+  IF symbols(vIdx).IsExplicit = DECL_IMPLICIT THEN
+    symbols(vIdx).IsExplicit = DECL_QUIET
+  END IF
+
+  IF hasField = 1 THEN
+    IF targetType <> TYPE_UDT THEN
+      throwCompilerErrorAndCancelTira "VARIABLE IS NOT A UDT", ASIS, 0
+      parse_OFFSET$ = ""
+      EXIT FUNCTION
+    END IF
+
+    tempUdtIndex = symbols(vIdx).UDTIndex
+    udtOffset = 0
+    tempIsDynamicString = 0
+
+    FOR iDot = 0 TO udtFieldCount - 1
+      uIdx = tempUdtIndex
+      fieldFound = 0
+      FOR iField = 0 TO udts(uIdx).FieldCount - 1
+        IF RTRIM$(udtFields(uIdx, iField).FieldName) = udtFieldNames$(iDot) THEN
+          udtOffset = udtOffset + udtFields(uIdx, iField).Offset
+          targetType = udtFields(uIdx, iField).DataType
+          tempUdtIndex = udtFields(uIdx, iField).UDTIndex
+          tempIsDynamicString = udtFields(uIdx, iField).IsDynamicString
+          fieldFound = 1
+          EXIT FOR
+        END IF
+      NEXT
+
+      IF fieldFound = 0 THEN
+        throwCompilerErrorAndCancelTira "UDT FIELD NOT FOUND", ASIS, 0
+        parse_OFFSET$ = ""
+        EXIT FUNCTION
+      END IF
+
+      IF iDot < udtFieldCount - 1 AND targetType <> TYPE_UDT THEN
+        throwCompilerErrorAndCancelTira "VARIABLE IS NOT A UDT", ASIS, 0
+        parse_OFFSET$ = ""
+        EXIT FUNCTION
+      END IF
+    NEXT iDot
+  END IF
+
+  indicesStr$ = ""
+  numParsedIndices = 0
+  IF hasIndex = 1 THEN
+    indicesStr$ = tiraParseArrayArgs$(parenStartIdx, closeParenIdx, 0)
+    IF indicesStr$ = "" AND compileError = 1 THEN
+      tira_Cancel
+      parse_OFFSET$ = ""
+      EXIT FUNCTION
+    END IF
+    closeParenIdx = returnedData2
+    numParsedIndices = returnedData3
+  END IF
+
+  IF hasIndex = 1 THEN
+    IF symbols(vIdx).IsArray = 0 THEN
+      throwCompilerErrorAndCancelTira "ARRAY NOT DIMMED", ASIS, 0
+      parse_OFFSET$ = ""
+      EXIT FUNCTION
+    END IF
+    IF symbols(vIdx).NumDimensions > 0 AND numParsedIndices <> symbols(vIdx).NumDimensions THEN
+      throwCompilerErrorAndCancelTira "WRONG NUMBER OF DIMENSIONS", ASIS, 0
+      parse_OFFSET$ = ""
+      EXIT FUNCTION
+    END IF
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("OFFSET", "_PTR")
+  IF scratchName$ = "" THEN
+    parse_OFFSET$ = ""
+    EXIT FUNCTION
+  END IF
+
+  resVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+
+  IF hasIndex = 0 AND hasField = 0 THEN
+    tiraOp TC_ADDRESS_OF, resVar$, "#" + LTRIM$(STR$(vIdx)), ""
+  ELSE
+    addrVar$ = tiraFrontendCalcAddress$(RTRIM$(symbols(vIdx).RecordName), indicesStr$, udtOffset)
+    IF addrVar$ = "" THEN
+      tira_Cancel
+      parse_OFFSET$ = ""
+      EXIT FUNCTION
+    END IF
+    tiraAssign resVar$, addrVar$
+  END IF
+
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_INTEGER64
+  exprIs.IsTemp = 1
+  parse_OFFSET$ = scratchName$
+
+END FUNCTION ' parse_OFFSET$
+
 
 ''''''''''''''''''''''''
 FUNCTION parse_NEWIMAGE$ (startIdx, endIdx, allowImplicit)
@@ -5259,6 +8120,223 @@ FUNCTION parse_PUT (startIdx)
 END FUNCTION ' parse_PUT
 
 ''''''''''''''''''''''''
+''''''''''''''''''''''''
+FUNCTION parse_PUTIMAGE (startIdx)
+
+  DIM endIdx AS LONG
+  DIM tokIdx AS LONG
+  DIM hasCoords AS LONG
+  DIM isStep1 AS LONG
+  DIM isStep2 AS LONG
+  DIM dashIdx AS LONG
+  DIM cComma AS LONG
+  DIM cStart1 AS LONG
+  DIM cEnd1 AS LONG
+  DIM cStart2 AS LONG
+  DIM cEnd2 AS LONG
+  DIM commaSrcDest AS LONG
+  DIM srcStart AS LONG
+  DIM srcEnd AS LONG
+  DIM destStart AS LONG
+  DIM destEnd AS LONG
+  DIM x1Var$
+  DIM y1Var$
+  DIM x2Var$
+  DIM y2Var$
+  DIM srcVar$
+  DIM destVar$
+  DIM newX1$
+  DIM newY1$
+  DIM newX2$
+  DIM newY2$
+  DIM cComma2 AS LONG
+
+  endIdx = lineTokenCount - 1
+
+  IF compileHasGraphics = 0 THEN
+    throwCompilerError "_PUTIMAGE REQUIRES #GRAPHICS", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  tokIdx = startIdx + 1
+  hasCoords = 0
+  isStep1 = 0
+  isStep2 = 0
+
+  IF tokIdx <= endIdx THEN
+    IF lineTokenVals(tokIdx) = TOK_STEP OR lineTokenVals(tokIdx) = 256 + ASC("(") THEN
+      hasCoords = 1
+    END IF
+  END IF
+
+  tira_Start
+
+  IF hasCoords = 1 THEN
+    IF lineTokenVals(tokIdx) = TOK_STEP THEN
+      isStep1 = 1
+      tokIdx = tokIdx + 1
+    END IF
+
+    IF tokIdx > endIdx OR lineTokenVals(tokIdx) <> 256 + ASC("(") THEN
+      throwCompilerErrorAndCancelTira "EXPECTED ( AFTER _PUTIMAGE", ASIS, 0
+      EXIT FUNCTION
+    END IF
+
+    dashIdx = 0
+    ff = findNextTokenAtDepth0(tokIdx, endIdx, 256 + ASC("-"))
+    IF ff = 1 THEN dashIdx = returnedData2
+
+    IF dashIdx > 0 THEN
+      cComma = retCoordinateBoundaries(tokIdx, dashIdx - 1)
+      IF cComma = 0 THEN
+        throwCompilerErrorAndCancelTira "_PUTIMAGE MISSING X1, Y1", ASIS, 0
+        EXIT FUNCTION
+      END IF
+      cStart1 = returnedData2
+      cEnd1 = returnedData3
+
+      x1Var$ = tiraParseExpressionInt$(cStart1, cComma - 1, ALIM, "COORDINATE MUST BE NUMERIC")
+      IF x1Var$ = "" THEN tira_Cancel: EXIT FUNCTION
+      y1Var$ = tiraParseExpressionInt$(cComma + 1, cEnd1, ALIM, "COORDINATE MUST BE NUMERIC")
+      IF y1Var$ = "" THEN tira_Cancel: EXIT FUNCTION
+
+      tokIdx = dashIdx + 1
+      IF tokIdx <= endIdx THEN
+        IF lineTokenVals(tokIdx) = TOK_STEP THEN
+          isStep2 = 1
+          tokIdx = tokIdx + 1
+        END IF
+      END IF
+
+      IF tokIdx > endIdx OR lineTokenVals(tokIdx) <> 256 + ASC("(") THEN
+        throwCompilerErrorAndCancelTira "EXPECTED ( AFTER -", ASIS, 0
+        EXIT FUNCTION
+      END IF
+
+      commaSrcDest = findComma(tokIdx, endIdx)
+      cEnd2 = endIdx
+      IF commaSrcDest > 0 THEN cEnd2 = commaSrcDest - 1
+
+      cComma2 = retCoordinateBoundaries(tokIdx, cEnd2)
+      IF cComma2 = 0 THEN
+        throwCompilerErrorAndCancelTira "_PUTIMAGE MISSING X2, Y2", ASIS, 0
+        EXIT FUNCTION
+      END IF
+      cStart2 = returnedData2
+      cEnd2 = returnedData3
+
+      x2Var$ = tiraParseExpressionInt$(cStart2, cComma2 - 1, ALIM, "COORDINATE MUST BE NUMERIC")
+      IF x2Var$ = "" THEN tira_Cancel: EXIT FUNCTION
+      y2Var$ = tiraParseExpressionInt$(cComma2 + 1, cEnd2, ALIM, "COORDINATE MUST BE NUMERIC")
+      IF y2Var$ = "" THEN tira_Cancel: EXIT FUNCTION
+
+      tokIdx = cEnd2 + 2
+      IF tokIdx <= endIdx AND lineTokenVals(tokIdx) = 256 + ASC(",") THEN
+        tokIdx = tokIdx + 1
+      END IF
+    ELSE
+      ff = findMatchingParen(tokIdx, endIdx)
+      IF ff = 0 THEN
+        throwCompilerErrorAndCancelTira "MALFORMED COORDINATES IN _PUTIMAGE", ASIS, 0
+        EXIT FUNCTION
+      END IF
+
+      cComma = retCoordinateBoundaries(tokIdx, returnedData2)
+      IF cComma = 0 THEN
+        throwCompilerErrorAndCancelTira "_PUTIMAGE MISSING X1, Y1", ASIS, 0
+        EXIT FUNCTION
+      END IF
+      cStart1 = returnedData2
+      cEnd1 = returnedData3
+
+      x1Var$ = tiraParseExpressionInt$(cStart1, cComma - 1, ALIM, "COORDINATE MUST BE NUMERIC")
+      IF x1Var$ = "" THEN tira_Cancel: EXIT FUNCTION
+      y1Var$ = tiraParseExpressionInt$(cComma + 1, cEnd1, ALIM, "COORDINATE MUST BE NUMERIC")
+      IF y1Var$ = "" THEN tira_Cancel: EXIT FUNCTION
+
+      x2Var$ = tiraDimVar$("T", TYPE_LONG)
+      tiraOp TC_ADD, x2Var$, x1Var$, _TRIM$(STR$(gfxConfig.SizeX))
+      tiraOp TC_SUB, x2Var$, x2Var$, "1"
+
+      y2Var$ = tiraDimVar$("T", TYPE_LONG)
+      tiraOp TC_ADD, y2Var$, y1Var$, _TRIM$(STR$(gfxConfig.SizeY))
+      tiraOp TC_SUB, y2Var$, y2Var$, "1"
+
+      tokIdx = returnedData2 + 1
+      IF tokIdx <= endIdx AND lineTokenVals(tokIdx) = 256 + ASC(",") THEN
+        tokIdx = tokIdx + 1
+      END IF
+    END IF
+
+    IF isStep1 = 1 THEN
+      newX1$ = tiraDimVar$("T", TYPE_LONG)
+      tiraOp TC_ADD, newX1$, "!G_GFX_VAL_CUR_X", x1Var$
+      x1Var$ = newX1$
+      newY1$ = tiraDimVar$("T", TYPE_LONG)
+      tiraOp TC_ADD, newY1$, "!G_GFX_VAL_CUR_Y", y1Var$
+      y1Var$ = newY1$
+    END IF
+
+    IF isStep2 = 1 THEN
+      newX2$ = tiraDimVar$("T", TYPE_LONG)
+      tiraOp TC_ADD, newX2$, x1Var$, x2Var$
+      x2Var$ = newX2$
+      newY2$ = tiraDimVar$("T", TYPE_LONG)
+      tiraOp TC_ADD, newY2$, y1Var$, y2Var$
+      y2Var$ = newY2$
+    END IF
+  ELSE
+    x1Var$ = tiraDimVar$("T", TYPE_LONG)
+    tiraAssign x1Var$, "0"
+    y1Var$ = tiraDimVar$("T", TYPE_LONG)
+    tiraAssign y1Var$, "0"
+    x2Var$ = tiraDimVar$("T", TYPE_LONG)
+    tiraOp TC_SUB, x2Var$, _TRIM$(STR$(gfxConfig.SizeX)), "1"
+    y2Var$ = tiraDimVar$("T", TYPE_LONG)
+    tiraOp TC_SUB, y2Var$, _TRIM$(STR$(gfxConfig.SizeY)), "1"
+  END IF
+
+  commaSrcDest = findComma(tokIdx, endIdx)
+  IF commaSrcDest > 0 THEN
+    srcStart = tokIdx
+    srcEnd = commaSrcDest - 1
+    destStart = commaSrcDest + 1
+    destEnd = endIdx
+  ELSE
+    srcStart = tokIdx
+    srcEnd = endIdx
+    destStart = 0
+    destEnd = 0
+  END IF
+
+  IF srcStart > 0 AND srcStart <= srcEnd THEN
+    srcVar$ = tiraParseExpressionInt$(srcStart, srcEnd, ALIM, "SOURCE MUST BE NUMERIC")
+    IF srcVar$ = "" THEN tira_Cancel: EXIT FUNCTION
+  ELSE
+    srcVar$ = tiraDimVar$("T", TYPE_LONG)
+    tiraAssign srcVar$, "!G_GFX_VAL_SRC_PAGE"
+  END IF
+
+  IF destStart > 0 AND destStart <= destEnd THEN
+    destVar$ = tiraParseExpressionInt$(destStart, destEnd, ALIM, "DEST MUST BE NUMERIC")
+    IF destVar$ = "" THEN tira_Cancel: EXIT FUNCTION
+  ELSE
+    destVar$ = tiraDimVar$("T", TYPE_LONG)
+    tiraAssign destVar$, "!G_GFX_VAL_DEST_PAGE"
+  END IF
+
+  tiraCall "RT_PUTIMAGE", 6, x1Var$ + ", " + y1Var$ + ", " + x2Var$ + ", " + y2Var$ + ", " + srcVar$ + ", " + destVar$
+
+  tiraTriggerAutoDisplay
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_PUTIMAGE = 1
+
+END FUNCTION ' parse_PUTIMAGE
+
+''''''''''''''''''''''''
 FUNCTION parse_RANDOMIZE (startIdx)
 
   DIM endIdx AS LONG
@@ -5753,6 +8831,255 @@ FUNCTION parse_RGB$ (startIdx, endIdx, allowImplicit)
 END FUNCTION ' parse_RGB$
 
 ''''''''''''''''''''''''
+''''''''''''''''''''''''
+FUNCTION parse_RGB32$ (startIdx, endIdx, allowImplicit)
+
+  DIM argR$
+  DIM argG$
+  DIM argB$
+  DIM comma1 AS LONG
+  DIM comma2 AS LONG
+  DIM scratchName$
+  DIM maskR$
+  DIM maskG$
+  DIM maskB$
+  DIM clampRMinDone$
+  DIM clampRDone$
+  DIM clampGMinDone$
+  DIM clampGDone$
+  DIM clampBMinDone$
+  DIM clampBDone$
+  DIM shiftG$
+  DIM shiftR$
+  DIM alphaVal$
+  DIM resVar$
+
+  IF checkIntrinsicSyntax(startIdx, endIdx, "_RGB32", 7) = 0 THEN
+    parse_RGB32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  comma1 = findComma(startIdx + 2, endIdx - 1)
+  IF comma1 = 0 THEN
+    throwCompilerError "_RGB32 REQUIRES 3 ARGUMENTS", ASIS, 0
+    parse_RGB32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  comma2 = findComma(comma1 + 1, endIdx - 1)
+  IF comma2 = 0 THEN
+    throwCompilerError "_RGB32 REQUIRES 3 ARGUMENTS", ASIS, 0
+    parse_RGB32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+
+  argR$ = tiraParseExpressionInt$(startIdx + 2, comma1 - 1, allowImplicit, "_RGB32 RED ARG MUST BE NUMERIC")
+  IF argR$ = "" THEN
+    parse_RGB32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  argG$ = tiraParseExpressionInt$(comma1 + 1, comma2 - 1, allowImplicit, "_RGB32 GREEN ARG MUST BE NUMERIC")
+  IF argG$ = "" THEN
+    parse_RGB32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  argB$ = tiraParseExpressionInt$(comma2 + 1, endIdx - 1, allowImplicit, "_RGB32 BLUE ARG MUST BE NUMERIC")
+  IF argB$ = "" THEN
+    parse_RGB32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("RGB32", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_RGB32$ = ""
+    EXIT FUNCTION
+  END IF
+
+  clampRMinDone$ = tiraLabelCreateNew$("RGB32_R_MIN_DONE")
+  clampRDone$ = tiraLabelCreateNew$("RGB32_R_DONE")
+  clampGMinDone$ = tiraLabelCreateNew$("RGB32_G_MIN_DONE")
+  clampGDone$ = tiraLabelCreateNew$("RGB32_G_DONE")
+  clampBMinDone$ = tiraLabelCreateNew$("RGB32_B_MIN_DONE")
+  clampBDone$ = tiraLabelCreateNew$("RGB32_B_DONE")
+
+  maskR$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign maskR$, argR$
+  tiraJmpCond "JGE", maskR$, "0", clampRMinDone$
+  tiraAssign maskR$, "0"
+  tiraLabel clampRMinDone$
+  tiraJmpCond "JLE", maskR$, "255", clampRDone$
+  tiraAssign maskR$, "255"
+  tiraLabel clampRDone$
+
+  maskG$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign maskG$, argG$
+  tiraJmpCond "JGE", maskG$, "0", clampGMinDone$
+  tiraAssign maskG$, "0"
+  tiraLabel clampGMinDone$
+  tiraJmpCond "JLE", maskG$, "255", clampGDone$
+  tiraAssign maskG$, "255"
+  tiraLabel clampGDone$
+
+  maskB$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign maskB$, argB$
+  tiraJmpCond "JGE", maskB$, "0", clampBMinDone$
+  tiraAssign maskB$, "0"
+  tiraLabel clampBMinDone$
+  tiraJmpCond "JLE", maskB$, "255", clampBDone$
+  tiraAssign maskB$, "255"
+  tiraLabel clampBDone$
+
+  shiftG$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_SHL, shiftG$, maskG$, "8"
+
+  shiftR$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_SHL, shiftR$, maskR$, "16"
+
+  ' Default the missing alpha value safely to &HFF000000 (-16777216)
+  alphaVal$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign alphaVal$, "-16777216"
+
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraOp TC_ADD, resVar$, maskB$, shiftG$
+  tiraOp TC_ADD, resVar$, resVar$, shiftR$
+  tiraOp TC_ADD, resVar$, resVar$, alphaVal$
+
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_RGB32$ = scratchName$
+
+END FUNCTION ' parse_RGB32$
+
+''''''''''''''''''''''''
+FUNCTION parse_RND$ (startIdx, endIdx, allowImplicit)
+
+  ' Returns a random single-precision floating point number
+
+  DIM arg1$
+  DIM scratchName$
+  DIM resVar$
+  DIM dblRes$
+  DIM maxVal$
+  DIM finalDbl$
+  DIM singleRes$
+
+  IF lineTokenVals(startIdx + 1) = 256 + ASC("(") AND lineTokenVals(endIdx) = 256 + ASC(")") THEN
+    IF startIdx + 3 > endIdx THEN
+      throwCompilerError "MALFORMED RND", ASIS, 0
+      parse_RND$ = ""
+      EXIT FUNCTION
+    END IF
+  ELSE
+    IF startIdx <> endIdx THEN
+      throwCompilerError "MALFORMED RND", ASIS, 0
+      parse_RND$ = ""
+      EXIT FUNCTION
+    END IF
+  END IF
+
+  tira_Start
+
+  IF startIdx <> endIdx THEN
+    IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+    arg1$ = tiraParseExpression$(startIdx + 2, endIdx - 1, allowImplicit)
+    IF arg1$ = "" THEN
+      tira_Cancel
+      parse_RND$ = ""
+      EXIT FUNCTION
+    END IF
+    IF exprIs.DataType = TYPE_STRING THEN
+      throwCompilerErrorAndCancelTira "INTRINSIC REQUIRES NUMERIC", ASIS, 0
+      parse_RND$ = ""
+      EXIT FUNCTION
+    END IF
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("RND", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_RND$ = ""
+    EXIT FUNCTION
+  END IF
+
+  ff = resolveSymbol(scratchName$)
+  IF ff = 1 THEN symbols(returnedData2).DataType = TYPE_SINGLE
+
+  tiraCall "IAT_RAND", 0, ""
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraNew TC_GET_RET, resVar$
+
+  dblRes$ = tiraDimVar$("T", TYPE_DOUBLE)
+  tiraOp TC_CAST, dblRes$, resVar$, LTRIM$(STR$(TYPE_DOUBLE))
+
+  maxVal$ = tiraDimVar$("T", TYPE_DOUBLE)
+  tiraAssign maxVal$, "32767.0#"
+
+  finalDbl$ = tiraDimVar$("T", TYPE_DOUBLE)
+  tiraOp TC_DIV, finalDbl$, dblRes$, maxVal$
+
+  singleRes$ = tiraDimVar$("T", TYPE_SINGLE)
+  tiraOp TC_CAST, singleRes$, finalDbl$, LTRIM$(STR$(TYPE_SINGLE))
+
+  tiraAssign scratchName$, singleRes$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_SINGLE
+  exprIs.IsTemp = 1
+  parse_RND$ = scratchName$
+
+END FUNCTION ' parse_RND$
+
+''''''''''''''''''''''''
+FUNCTION parse_SCREENEXISTS$ (startIdx, endIdx, allowImplicit)
+
+  DIM scratchName$
+  DIM resVar$
+
+  IF startIdx <> endIdx THEN
+    throwCompilerError "MALFORMED _SCREENEXISTS", ASIS, 0
+    parse_SCREENEXISTS$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  scratchName$ = tiraResolveHoistVar$("SCREX", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_SCREENEXISTS$ = ""
+    EXIT FUNCTION
+  END IF
+
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+
+  ' Evaluates the window readiness spinlock to determine if the screen exists
+  ' Console windows are always considered ready
+  IF compileHasGraphics = 1 THEN
+    tiraOp TC_NEG, resVar$, "!G_WND_FLG_READY", ""
+  ELSE
+    tiraAssign resVar$, "-1"
+  END IF
+
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_SCREENEXISTS$ = scratchName$
+
+END FUNCTION ' parse_SCREENEXISTS$
+
+''''''''''''''''''''''''
 FUNCTION parse_SCREENICON (startIdx)
 
   DIM endIdx AS LONG
@@ -5840,6 +9167,139 @@ FUNCTION parse_SGN$ (startIdx, endIdx, allowImplicit)
 END FUNCTION ' parse_SGN$
 
 ''''''''''''''''''''''''
+FUNCTION parse_SHELL (startIdx)
+
+  DIM endIdx AS LONG
+  DIM hasHide AS LONG
+  DIM hasDontWait AS LONG
+  DIM cmdStart AS LONG
+  DIM cmdStr$
+  DIM strDataPtr$
+  DIM strLen$
+  DIM hideVal$
+  DIM structRawPtr$
+  DIM startupInfoPtr$
+  DIM processInfoPtr$
+  DIM cmdAllocSize$
+  DIM cmdBuffer$
+  DIM nullPtr$
+  DIM createResult$
+  DIM doneLbl$
+  DIM processHandle$
+  DIM threadHandle$
+  DIM tokVal AS LONG
+
+  endIdx = lineTokenCount - 1
+  hasHide = 0
+  hasDontWait = 0
+  cmdStart = startIdx + 1
+
+  DO WHILE cmdStart <= endIdx
+    tokVal = lineTokenVals(cmdStart)
+
+    SELECT CASE tokVal
+
+      CASE TOK_HIDE
+        hasHide = 1
+        cmdStart = cmdStart + 1
+      CASE TOK_DONTWAIT
+        hasDontWait = 1
+        cmdStart = cmdStart + 1
+      CASE ELSE
+        EXIT DO
+
+    END SELECT ' tokVak
+
+  LOOP
+
+  IF cmdStart > endIdx THEN
+    throwCompilerError "EXPECTED COMMAND STRING", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_STRING
+
+  cmdStr$ = tiraParseExpression$(cmdStart, endIdx, ALIM)
+  IF cmdStr$ = "" THEN
+    tira_Cancel
+    EXIT FUNCTION
+  END IF
+
+  IF exprIs.DataType <> TYPE_STRING THEN
+    throwCompilerErrorAndCancelTira "COMMAND MUST BE A STRING", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
+  ' Extract raw pointer to our seamlessly null-terminated C string in memory
+  strDataPtr$ = tiraGetStringData$(cmdStr$)
+
+  hideVal$ = tiraDimVar$("T", TYPE_LONG)
+  IF hasHide = 1 THEN
+    tiraAssign hideVal$, "0" ' SW_HIDE flag
+  ELSE
+    tiraAssign hideVal$, "1" ' SW_SHOWNORMAL flag
+  END IF
+
+  IF hasDontWait = 1 THEN
+    ' WinExec remains the asynchronous path for SHELL _DONTWAIT
+    tiraCall "IAT_WINEXEC", 2, strDataPtr$ + ", " + hideVal$
+  ELSE
+    strLen$ = tiraGetStringLen$(cmdStr$)
+
+    ' Reserve one aligned block for STARTUPINFOA and PROCESS_INFORMATION before the variable-length command buffer
+    structRawPtr$ = tiraAllocTempMem$("135")
+    startupInfoPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraOp TC_ADD, startupInfoPtr$, structRawPtr$, "7"
+    tiraOp TC_AND, startupInfoPtr$, startupInfoPtr$, "-8"
+
+    processInfoPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraOp TC_ADD, processInfoPtr$, startupInfoPtr$, "104"
+
+    tiraMemSet startupInfoPtr$, "0", "128"
+    tiraNew TC_WRITE_MEM_OFFSET, startupInfoPtr$ + ", 0, 104, 4" ' STARTUPINFOA.cb
+    tiraNew TC_WRITE_MEM_OFFSET, startupInfoPtr$ + ", 60, 1, 4" ' STARTF_USESHOWWINDOW
+    tiraNew TC_WRITE_MEM_OFFSET, startupInfoPtr$ + ", 64, " + hideVal$ + ", 2" ' STARTUPINFOA.wShowWindow
+
+    ' CreateProcessA requires a writable null-terminated command-line buffer
+    cmdAllocSize$ = tiraDimVar$("T", TYPE_LONG)
+    tiraOp TC_ADD, cmdAllocSize$, strLen$, "1"
+    cmdBuffer$ = tiraAllocTempMem$(cmdAllocSize$)
+    tiraMemcpy cmdBuffer$, strDataPtr$, strLen$
+
+    nullPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraOp TC_ADD, nullPtr$, cmdBuffer$, strLen$
+    tiraWriteMem nullPtr$, "0", "1"
+
+    tiraCall "IAT_CREATEPROCESSA", 10, "0, " + cmdBuffer$ + ", 0, 0, 0, 0, 0, 0, " + startupInfoPtr$ + ", " + processInfoPtr$
+    createResult$ = tiraDimVar$("T", TYPE_LONG)
+    tiraNew TC_GET_RET, createResult$
+
+    doneLbl$ = tiraLabelCreateNew$("SHELL_DONE")
+    tiraJmpCond "JE", createResult$, "0", doneLbl$
+
+    processHandle$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraNew TC_READ_MEM, processHandle$ + ", " + processInfoPtr$
+
+    threadHandle$ = tiraDimVar$("T", TYPE_INTEGER64)
+    tiraNew TC_READ_MEM_OFFSET, threadHandle$ + ", " + processInfoPtr$ + ", 8"
+
+    tiraCall "IAT_WAITFORSINGLEOBJECT", 2, processHandle$ + ", -1"
+    tiraCall "IAT_CLOSEHANDLE", 1, processHandle$
+    tiraCall "IAT_CLOSEHANDLE", 1, threadHandle$
+
+    tiraLabel doneLbl$
+  END IF
+
+  tiraScheduleHeapReset
+  tira_EndAndProcess
+
+  parse_SHELL = 1
+
+END FUNCTION ' parse_SHELL
+
+''''''''''''''''''''''''
 FUNCTION parse_SIN$ (startIdx, endIdx, allowImplicit)
 
   DIM arg1$
@@ -5899,66 +9359,118 @@ FUNCTION parse_SIN$ (startIdx, endIdx, allowImplicit)
 END FUNCTION ' parse_SIN$
 
 ''''''''''''''''''''''''
-FUNCTION parse_SPACE$ (startIdx, endIdx, allowImplicit)
+FUNCTION parse_SOURCE (startIdx)
 
-  DIM arg1$
-  DIM scratchName$
-  DIM skipLen$
-  DIM dataPtr$
-  DIM descPtr$
-  DIM jmpDone$
+  DIM endIdx AS LONG
+  DIM pageVar$
+  DIM lblSrc0$
+  DIM lblSrc1$
+  DIM lblSrc2$
+  DIM lblSrc3$
+  DIM lblSrcEnd$
 
-  IF checkIntrinsicSyntax(startIdx, endIdx, "SPACE$", 3) = 0 THEN
-    parse_SPACE$ = ""
+  endIdx = lineTokenCount - 1
+
+  IF compileHasGraphics = 0 THEN
+    throwCompilerError "_SOURCE REQUIRES #GRAPHICS", ASIS, 0
     EXIT FUNCTION
   END IF
 
-  ' Sovereign command opens its own compilation block
+  IF endIdx < startIdx + 1 THEN
+    throwCompilerError "EXPECTED PAGE NUMBER AFTER _SOURCE", ASIS, 0
+    EXIT FUNCTION
+  END IF
+
   tira_Start
 
   IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
-  arg1$ = tiraParseExpressionInt$(startIdx + 2, endIdx - 1, allowImplicit, "SPACE$ REQUIRES NUMERIC ARGUMENT")
-  IF arg1$ = "" THEN
-    parse_SPACE$ = ""
+
+  pageVar$ = tiraParseExpressionInt$(startIdx + 1, endIdx, ALIM, "PAGE MUST BE NUMERIC")
+  IF pageVar$ = "" THEN
+    tira_Cancel
     EXIT FUNCTION
   END IF
 
-  scratchName$ = tiraResolveHoistVar$("SPACE", "_DSC")
-  IF scratchName$ = "" THEN
-    parse_SPACE$ = ""
-    EXIT FUNCTION
-  END IF
+  lblSrc0$ = tiraLabelCreateNew$("SRC_0")
+  lblSrc1$ = tiraLabelCreateNew$("SRC_1")
+  lblSrc2$ = tiraLabelCreateNew$("SRC_2")
+  lblSrc3$ = tiraLabelCreateNew$("SRC_3")
+  lblSrcEnd$ = tiraLabelCreateNew$("SRC_END")
 
-  descPtr$ = tiraDimVar$("T", TYPE_INTEGER64)
-  tiraAssign descPtr$, scratchName$
+  tiraJmpCond "JE", pageVar$, "0", lblSrc0$
+  tiraJmpCond "JE", pageVar$, "1", lblSrc1$
+  tiraJmpCond "JE", pageVar$, "2", lblSrc2$
+  tiraJmpCond "JE", pageVar$, "3", lblSrc3$
+  tiraJmp lblSrcEnd$
 
-  skipLen$ = tiraLabelCreateNew$("SPACE_SKIP")
+  tiraLabel lblSrc0$
+  tiraAssign "!G_GFX_PTR_SRC_FRMB", "!G_GFX_PTR_FRMB_BACK"
+  tiraAssign "!G_GFX_PTR_SRC_BUFR", "!G_GFX_PTR_BUFR_BACK"
+  tiraOp TC_ADDRESS_OF, "!G_GFX_PTR_SRC_CNT", "!G_GFX_VAL_BUFR_COUNT_BACK", ""
+  tiraJmp lblSrcEnd$
 
-  tiraJmpCond "JLE", arg1$, "0", skipLen$
+  tiraLabel lblSrc1$
+  tiraAssign "!G_GFX_PTR_SRC_FRMB", "!G_GFX_PTR_FRMB_FRONT"
+  tiraAssign "!G_GFX_PTR_SRC_BUFR", "!G_GFX_PTR_BUFR_FRONT"
+  tiraOp TC_ADDRESS_OF, "!G_GFX_PTR_SRC_CNT", "!G_GFX_VAL_BUFR_COUNT_FRONT", ""
+  tiraJmp lblSrcEnd$
 
-  dataPtr$ = tiraAllocTempMem$(arg1$)
+  tiraLabel lblSrc2$
+  tiraAssign "!G_GFX_PTR_SRC_FRMB", "!G_GFX_PTR_FRMB_PAGE2"
+  tiraAssign "!G_GFX_PTR_SRC_BUFR", "!G_GFX_PTR_BUFR_PAGE2"
+  tiraOp TC_ADDRESS_OF, "!G_GFX_PTR_SRC_CNT", "!G_GFX_VAL_BUFR_COUNT_PAGE2", ""
+  tiraJmp lblSrcEnd$
 
-  ' Memset with 32 (space character)
-  tiraMemSet dataPtr$, "32", arg1$
+  tiraLabel lblSrc3$
+  tiraAssign "!G_GFX_PTR_SRC_FRMB", "!G_GFX_PTR_FRMB_PAGE3"
+  tiraAssign "!G_GFX_PTR_SRC_BUFR", "!G_GFX_PTR_BUFR_PAGE3"
+  tiraOp TC_ADDRESS_OF, "!G_GFX_PTR_SRC_CNT", "!G_GFX_VAL_BUFR_COUNT_PAGE3", ""
 
-  tiraBuildStringDescriptor descPtr$, dataPtr$, arg1$, "0"
+  tiraLabel lblSrcEnd$
+  tiraAssign "!G_GFX_VAL_SRC_PAGE", pageVar$
 
-  jmpDone$ = tiraLabelCreateNew$("SPACE_DONE")
-  tiraJmp jmpDone$
-
-  tiraLabel skipLen$
-  ' Safely construct an empty descriptor entirely within the Temp Heap paradigm
-  tiraBuildStringDescriptor descPtr$, "0", "0", "0"
-  tiraLabel jmpDone$
-
-  ' Close the block (NO HEAP RESET, so the string survives for the parent!)
+  tiraScheduleHeapReset
   tira_EndAndProcess
 
-  exprIs.DataType = TYPE_STRING
-  exprIs.IsTemp = 1
-  parse_SPACE$ = scratchName$
+  parse_SOURCE = 1
 
-END FUNCTION ' parse_SPACE$
+END FUNCTION ' parse_SOURCE
+
+''''''''''''''''''''''''
+FUNCTION parse_SOURCE_FUNC$ (startIdx, endIdx, allowImplicit)
+
+  DIM scratchName$
+  DIM resVar$
+
+  IF startIdx <> endIdx THEN
+    throwCompilerError "MALFORMED _SOURCE", ASIS, 0
+    parse_SOURCE_FUNC$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  scratchName$ = tiraResolveHoistVar$("SOURCE", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_SOURCE_FUNC$ = ""
+    EXIT FUNCTION
+  END IF
+
+  ff = resolveSymbol(scratchName$)
+  IF ff = 1 THEN symbols(returnedData2).DataType = TYPE_LONG
+
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign resVar$, "!G_GFX_VAL_SRC_PAGE"
+
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_SOURCE_FUNC$ = scratchName$
+
+END FUNCTION ' parse_SOURCE_FUNC$
 
 ''''''''''''''''''''''''
 FUNCTION parse_STRINGFUNC$ (startIdx, endIdx, allowImplicit)
@@ -6084,6 +9596,38 @@ FUNCTION parse_STRINGFUNC$ (startIdx, endIdx, allowImplicit)
   parse_STRINGFUNC$ = scratchName$
 
 END FUNCTION ' parse_STRINGFUNC$
+
+''''''''''''''''''''''''
+
+''''''''''''''''''''''''
+FUNCTION parse_SYSTEM (startIdx)
+
+  DIM endIdx AS LONG
+
+  endIdx = lineTokenCount - 1
+
+  tira_Start
+
+  IF endIdx > startIdx THEN
+    exprVar$ = tiraParseExpressionInt$(startIdx + 1, endIdx, ALIM, "SYSTEM REQUIRES NUMERIC")
+    IF exprVar$ = "" THEN
+      tira_Cancel
+      EXIT FUNCTION
+    END IF
+
+    ff = resolveSymbol("!G_SYS_VAL_EXIT")
+    IF ff = 1 THEN
+      tiraAssign "!G_SYS_VAL_EXIT", exprVar$
+    END IF
+  END IF
+
+  tiraJmp "@END_PROGRAM"
+
+  tira_EndAndProcess
+
+  parse_SYSTEM = 1
+
+END FUNCTION ' parse_SYSTEM
 
 ''''''''''''''''''''''''
 FUNCTION parse_THROWERR (startIdx)
@@ -6314,93 +9858,6 @@ FUNCTION parse_TRIM$ (startIdx, endIdx, allowImplicit)
 END FUNCTION ' parse_TRIM$
 
 ''''''''''''''''''''''''
-FUNCTION parse_UBOUND$ (startIdx, endIdx, allowImplicit)
-
-  DIM arrNameTok$
-  DIM comma1 AS LONG
-  DIM vIdx AS LONG
-  DIM scratchName$
-  DIM dimVar$
-  DIM resVar$
-  DIM lblEnd$
-
-  IF checkIntrinsicSyntax(startIdx, endIdx, "UBOUND", 3) = 0 THEN
-    parse_UBOUND$ = ""
-    EXIT FUNCTION
-  END IF
-
-  comma1 = findComma(startIdx + 2, endIdx - 1)
-
-  arrNameTok$ = UCASE$(retTokenText$(lineTokens$(startIdx + 2)))
-  ff = resolveSymbol(arrNameTok$)
-  IF ff = 0 THEN
-    parse_UBOUND$ = ""
-    EXIT FUNCTION
-  END IF
-  vIdx = returnedData2
-
-  IF symbols(vIdx).IsArray = 0 THEN
-    throwCompilerError "UBOUND REQUIRES AN ARRAY", ASIS, 0
-    parse_UBOUND$ = ""
-    EXIT FUNCTION
-  END IF
-
-  tira_Start
-
-  IF comma1 > 0 THEN
-    dimVar$ = tiraParseExpressionInt$(comma1 + 1, endIdx - 1, allowImplicit, "DIMENSION MUST BE NUMERIC")
-    IF dimVar$ = "" THEN
-      parse_UBOUND$ = ""
-      EXIT FUNCTION
-    END IF
-  ELSE
-    dimVar$ = "1"
-  END IF
-
-  scratchName$ = tiraResolveHoistVar$("UBOUND", "_VAL")
-  IF scratchName$ = "" THEN
-    parse_UBOUND$ = ""
-    EXIT FUNCTION
-  END IF
-
-  resVar$ = tiraDimVar$("T", TYPE_LONG)
-
-  descAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
-  tiraOp TC_ADDRESS_OF, descAddr$, "#" + LTRIM$(STR$(vIdx)), ""
-
-  numDims$ = tiraDimVar$("T", TYPE_LONG)
-  tiraNew TC_READ_MEM_OFFSET, numDims$ + ", " + descAddr$ + ", 12"
-
-  lblEnd$ = tiraLabelCreateNew$("UB_END")
-  tiraAssign resVar$, "0"
-  tiraJmpCond "JG", dimVar$, numDims$, lblEnd$
-  tiraJmpCond "JL", dimVar$, "1", lblEnd$
-
-  offsetVar$ = tiraDimVar$("T", TYPE_LONG)
-  tiraOp TC_SUB, offsetVar$, dimVar$, "1"
-  tiraOp TC_MUL, offsetVar$, offsetVar$, "8"
-  tiraOp TC_ADD, offsetVar$, offsetVar$, "16"
-
-  dimLimitAddr$ = tiraDimVar$("T", TYPE_INTEGER64)
-  tiraOp TC_ADD, dimLimitAddr$, descAddr$, offsetVar$
-
-  axVar$ = tiraDimVar$("T", TYPE_INTEGER64)
-  tiraNew TC_READ_MEM, axVar$ + ", " + dimLimitAddr$
-
-  tiraOp TC_SUB, resVar$, axVar$, "1"
-
-  tiraLabel lblEnd$
-  tiraAssign scratchName$, resVar$
-
-  tira_EndAndProcess
-
-  exprIs.DataType = TYPE_LONG
-  exprIs.IsTemp = 1
-  parse_UBOUND$ = scratchName$
-
-END FUNCTION ' parse_UBOUND$
-
-''''''''''''''''''''''''
 FUNCTION parse_WHEEL$ (startIdx, endIdx, allowImplicit)
 
   DIM arg1$
@@ -6441,3 +9898,136 @@ FUNCTION parse_WHEEL$ (startIdx, endIdx, allowImplicit)
   parse_WHEEL$ = scratchName$
 
 END FUNCTION ' parse_WHEEL$
+
+''''''''''''''''''''''''
+''''''''''''''''''''''''
+FUNCTION parse_WIDTH$ (startIdx, endIdx, allowImplicit)
+  ' Func version, will need to change names later when WIDTH without underscore is supported
+
+  DIM arg1$
+  DIM scratchName$
+  DIM resVar$
+  DIM resWidth AS LONG
+
+  IF lineTokenVals(startIdx + 1) = 256 + ASC("(") AND lineTokenVals(endIdx) = 256 + ASC(")") THEN
+    IF startIdx + 3 > endIdx THEN
+      throwCompilerError "MALFORMED _WIDTH", ASIS, 0
+      parse_WIDTH$ = ""
+      EXIT FUNCTION
+    END IF
+  ELSE
+    IF startIdx <> endIdx THEN
+      throwCompilerError "MALFORMED _WIDTH", ASIS, 0
+      parse_WIDTH$ = ""
+      EXIT FUNCTION
+    END IF
+  END IF
+
+  tira_Start
+
+  IF startIdx <> endIdx THEN
+    IF compileEmeraldMode = 1 THEN expectedSymType = TYPE_SINGLE
+    arg1$ = tiraParseExpressionInt$(startIdx + 2, endIdx - 1, allowImplicit, "HANDLE MUST BE NUMERIC")
+    IF arg1$ = "" THEN
+      tira_Cancel
+      parse_WIDTH$ = ""
+      EXIT FUNCTION
+    END IF
+  END IF
+
+  scratchName$ = tiraResolveHoistVar$("WIDTH", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_WIDTH$ = ""
+    EXIT FUNCTION
+  END IF
+
+  ff = resolveSymbol(scratchName$)
+  IF ff = 1 THEN symbols(returnedData2).DataType = TYPE_LONG
+
+  resWidth = 120
+  IF compileHasGraphics = 1 THEN resWidth = gfxConfig.SizeX
+
+  resVar$ = tiraDimVar$("T", TYPE_LONG)
+  tiraAssign resVar$, LTRIM$(STR$(resWidth))
+
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_LONG
+  exprIs.IsTemp = 1
+  parse_WIDTH$ = scratchName$
+
+END FUNCTION ' parse_WIDTH$
+
+''''''''''''''''''''''''
+FUNCTION parse_WINDOWHANDLE$ (startIdx, endIdx, allowImplicit)
+
+  DIM scratchName$
+  DIM resVar$
+
+  IF startIdx <> endIdx THEN
+    throwCompilerError "MALFORMED _WINDOWHANDLE", ASIS, 0
+    parse_WINDOWHANDLE$ = ""
+    EXIT FUNCTION
+  END IF
+
+  tira_Start
+
+  scratchName$ = tiraResolveHoistVar$("WNDHND", "_VAL")
+  IF scratchName$ = "" THEN
+    parse_WINDOWHANDLE$ = ""
+    EXIT FUNCTION
+  END IF
+
+  ' Explicitly force the data type to 64-bit integer
+  ff = resolveSymbol(scratchName$)
+  IF ff = 1 THEN symbols(returnedData2).DataType = TYPE_INTEGER64
+
+  resVar$ = tiraDimVar$("T", TYPE_INTEGER64)
+
+  IF compileHasGraphics = 1 THEN
+    tiraAssign resVar$, "!G_WND_VAL_HWND"
+  ELSE
+    tiraCall "IAT_GETCONSOLEWINDOW", 0, ""
+    tiraNew TC_GET_RET, resVar$
+  END IF
+
+  tiraAssign scratchName$, resVar$
+
+  tira_EndAndProcess
+
+  exprIs.DataType = TYPE_INTEGER64
+  exprIs.IsTemp = 1
+  parse_WINDOWHANDLE$ = scratchName$
+
+END FUNCTION ' parse_WINDOWHANDLE$
+
+
+''''''''''''''''''''''''
+SUB waitKeyRelease (wKey$)
+
+  DIM currentDest AS LONG
+
+  currentDest = _DEST
+
+  IF currentDest = logicalScreen THEN
+    dispScreenFlushUpdate ' Logical-screen modals still require their normal scaled presentation
+  ELSE
+    _DISPLAY ' Physical screen content is already complete and must not be replaced by logicalScreen
+  END IF
+
+  DO
+  LOOP UNTIL keyCheck(wKey$) = 0
+
+END SUB ' waitKeyRelease
+
+''''''''''''''''''''''''
+SUB waitTimer (wSeconds)
+
+  tGoal = TIMER + wSeconds
+  DO WHILE TIMER < tGoal
+  LOOP
+
+END SUB ' waitTimer
+
